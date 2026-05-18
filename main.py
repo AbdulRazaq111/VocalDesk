@@ -10,11 +10,7 @@ from groq import Groq
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from fastapi.responses import HTMLResponse
 
-print("DATABASE_URL:", bool(os.getenv("DATABASE_URL")))
-print("GROQ_API_KEY:", bool(os.getenv("GROQ_API_KEY")))
-print("ELEVENLABS_API_KEY:", bool(os.getenv("ELEVENLABS_API_KEY")))
-print("WHATSAPP_TOKEN:", bool(os.getenv("WHATSAPP_TOKEN")))
-print("TWILIO_ACCOUNT_SID:", bool(os.getenv("TWILIO_ACCOUNT_SID")))
+
 load_dotenv()
 
 app = FastAPI()
@@ -306,4 +302,4 @@ async def voice_endpoint():
 # Windows Multi-processing fix
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=10000)
