@@ -1,9 +1,9 @@
 fastapi
 uvicorn[standard]
 sqlalchemy
-psycopg2-binary==2.9.9
+psycopg2-binary>=2.9.10
 python-dotenv
 openai
 requests
 python-multipart
-aiofiles==23.2.1
+aiofiles>=23.2.1
