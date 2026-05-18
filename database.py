@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 import os
 from dotenv import load_dotenv
 
+print("STEP 2")
 # .env file se password aur settings load karna
 load_dotenv()
 

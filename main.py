@@ -10,7 +10,7 @@ from groq import Groq
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from fastapi.responses import HTMLResponse
 
-
+print("STEP 1")
 load_dotenv()
 
 app = FastAPI()
