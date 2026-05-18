@@ -10,7 +10,11 @@ from groq import Groq
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from fastapi.responses import HTMLResponse
 
-
+print("DATABASE_URL:", bool(os.getenv("DATABASE_URL")))
+print("GROQ_API_KEY:", bool(os.getenv("GROQ_API_KEY")))
+print("ELEVENLABS_API_KEY:", bool(os.getenv("ELEVENLABS_API_KEY")))
+print("WHATSAPP_TOKEN:", bool(os.getenv("WHATSAPP_TOKEN")))
+print("TWILIO_ACCOUNT_SID:", bool(os.getenv("TWILIO_ACCOUNT_SID")))
 load_dotenv()
 
 app = FastAPI()
