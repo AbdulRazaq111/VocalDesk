@@ -9,11 +9,19 @@ from dotenv import load_dotenv
 from groq import Groq
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 print("STEP 1")
 load_dotenv()
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Database Tables Create Karna (Server start hote hi tables ban jayenge)
 models.Base.metadata.create_all(bind=engine)
