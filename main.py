@@ -40,6 +40,13 @@ async def verify(request: Request):
     if params.get("hub.verify_token") == VERIFY_TOKEN:
         return Response(content=params.get("hub.challenge"), media_type="text/plain")
     return "Verification Failed"
+orders_db = []
+
+@app.get("/orders")
+async def get_all_orders():
+    """Yeh endpoint frontend ko live data supply karega"""
+    return orders_db
+
 
 @app.post("/webhook")
 async def handle_msg(request: Request):
