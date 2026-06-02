@@ -59,6 +59,14 @@ async def handle_msg(request: Request):
             user_phone = val['messages'][0]['from']
             user_text = val['messages'][0]['text']['body']
             print(f"Naya message: {user_text} from {user_phone}")
+            orders_db.append({
+            "id": len(orders_db) + 1,
+            "customer_phone": user_phone,
+            "items_detected": "1x Kababjees Premium Combo Roll",  # Default placeholder for immediate display
+            "bill_amount": "1,450",                               # Default placeholder
+            "user_text": user_text,
+            "ai_text": "Order received! Processing via VocalDesk AI..."
+        })
 
             
 
