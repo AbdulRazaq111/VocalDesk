@@ -40,6 +40,7 @@ async def verify(request: Request):
     if params.get("hub.verify_token") == VERIFY_TOKEN:
         return Response(content=params.get("hub.challenge"), media_type="text/plain")
     return "Verification Failed"
+
 orders_db = []
 
 @app.get("/orders")
@@ -61,38 +62,6 @@ async def handle_msg(request: Request):
             user_phone = val['messages'][0]['from']
             user_text = val['messages'][0]['text']['body']
             print(f"Naya message: {user_text} from {user_phone}")
-            
-            # --- VOCALDESK LIVE SMART CONVERSATION TRACKER ---
-            # Is poore block ke peeche sahi spaces (12 spaces) hone chahiye
-            existing_session = None
-            for order in orders_db:
-                if order["customer_phone"] == user_phone:
-                    existing_session = order
-                    break
-            
-            # Yahan bot ka live reply fetch karwayein jo aapka model generate krta he
-            bot_reply = ai_reply # Agar aapka real AI model reply object bana he toh usey yahan assign krein
-            
-            if existing_session:
-                # Purane message ko mitane ke bajaye new line character (\n\n) ke sath jor dain
-                existing_session["user_text"] = existing_session.get("user_text", "") + f"\n\nCustomer: {user_text}"
-                existing_session["ai_text"] = existing_session.get("ai_text", "") + f"\n\nSana AI: {bot_reply}"
-            else:
-                # Pehla message aane par naya core node session banayein
-                orders_db.append({
-                    "id": len(orders_db) + 1,
-                    "customer_phone": user_phone,
-                    "items_detected": "Pending Input...", 
-                    "bill_amount": "0",                  
-                    "user_text": user_text,
-                    "ai_text": bot_reply,
-                    "status": "In Progress"
-                })
-            # --------------------------------------------------
-            
-
-
-
 
             # 1. User check ya create karna (PostgreSQL)
             db_user = db.query(models.User).filter(models.User.phone_number == user_phone).first()
@@ -106,26 +75,39 @@ async def handle_msg(request: Request):
             if user_text.lower() in greetings:
                 #db.query(models.Message).filter(models.Message.user_id == db_user.id).delete()
                 #db.commit()
-                welcome_reply = "Asalam-o-Alaikum! Kababjees mein khush amdeed. Main apka order lene ke liye hazir hon. Aaj aap kya khana pasand karenge?"
+                welcome_reply = "Asalam-o-Likum! Kababjees mein khush amdeed. Main apka order lene ke liye hazir hon. Aaj aap kya khana pasand karenge?"
+                
+                # Dynamic Sync to Presentation Ledger for Greetings
+                existing_session = next((order for order in orders_db if order["customer_phone"] == user_phone), None)
+                if existing_session:
+                    existing_session["user_text"] = existing_session.get("user_text", "") + f"\n\nCustomer: {user_text}"
+                    existing_session["ai_text"] = existing_session.get("ai_text", "") + f"\n\nSana AI: {welcome_reply}"
+                else:
+                    orders_db.append({
+                        "id": len(orders_db) + 1,
+                        "customer_phone": user_phone,
+                        "items_detected": "Pending Input...", 
+                        "bill_amount": "0",                  
+                        "user_text": user_text,
+                        "ai_text": welcome_reply,
+                        "status": "In Progress"
+                    })
+
                 send_text(user_phone, welcome_reply)
                 return {"status": "success"}
 
 
             # --- SMART KNOWLEDGE RETRIEVAL (Kababjees Menu) ---
-            # Hum sirf wo rows uthayenge jo user ke sawal se match karti hon
             search_words = user_text.lower().split()
             all_info = db.query(models.BusinessKnowledge).all()
             
             relevant_context = ""
             for item in all_info:
-                # Agar user 'burger' bole toh sirf burger wala data context mein jaye
                 if any(word in item.answer.lower() or word in item.question.lower() for word in search_words):
                     relevant_context += f"\nRelevant Info: {item.answer}"
 
-            # Agar koi match na mile toh default small context
             if not relevant_context:
                 relevant_context = "Kababjees Menu includes Fried Chicken, Burgers, Sandwiches, and Exclusive Deals."
-            # -------------------------------------------
 
             # 2. Memory Context (Pichli 10 baatein taake order yaad rahe)
             history = db.query(models.Conversation).filter(
@@ -134,17 +116,19 @@ async def handle_msg(request: Request):
             
             # --- THE STRICT SALESMAN LOGIC ---
             system_content = (
-                f"You are the official Kababjees Voice Sales Agent. "
-                f"STRICT INSTRUCTION: Use this Filtered Menu Data: {relevant_context}. "
-                f"\n\nRULES IN ROMAN URDU:"
-                f"\n1. Greet professionally: 'Asalam-o-Alaikum! Kababjees mein khush amdeed. Main apka order lene ke liye hazir hon.'"
-                f"\n2. PRICE LOCK: Agar customer kisi item ka puche, toh context mein 'EXACT PRICES FOUND' wala hissa lazmi check karo. Agar price mil jaye toh batana zaroori hai."
-                f"\n3. NO REPETITION: Poora menu list mat karo. Sirf us item ki baat karo jo user ne puchi hai."
-                f"\n4. MATH LOGIC: Agar user quantity bataye (e.g. 2 pieces), toh total price calculate karke batao."
-                f"\n5. UPSELL: Main item ke baad pucho: 'Sir, iske sath Raita, Fries ya Cold drink add karni hai?'"
-                f"\n6. ORDER SUMMARY: Aakhir mein bill, Delivery address aur payment method confirm karo."
-                f"\n7. Speak like a professional waiter, short and polite."
-                f"\n7. Tum Kababjees ke salesman ho. Jawab hamesha 1-2 lines mein do. Agar koi price puche toh sirf price aur item ka naam batao, lambay paragraphs mat likho. Short, Professional aur To-the-point baat karo."
+                f"You are the official Kababjees Voice Sales Agent.\n"
+                f"STRICT INSTRUCTION: Use this Filtered Menu Data: {relevant_context}.\n\n"
+                f"RULES IN ROMAN URDU:\n"
+                f"1. Greet professionally: 'Asalam-o-Alaikum! Kababjees mein khush amdeed. Main apka order lene ke liye hazir hon.'\n"
+                f"2. PRICE LOCK: Agar customer kisi item ka puche, toh context mein 'EXACT PRICES FOUND' wala hissa lazmi check karo. Agar price mil jaye toh batana zaroori hai.\n"
+                f"3. NO REPETITION: Poora menu list mat karo. Sirf us item ki baat karo jo user ne puchi hai.\n"
+                f"4. MATH LOGIC: Agar user quantity bataye (e.g. 2 pieces), toh total price calculate karke batao.\n"
+                f"5. UPSELL: Main item ke baad pucho: 'Sir, iske sath Raita, Fries ya Cold drink add karni hai?'\n"
+                f"6. ORDER SUMMARY: Aakhir mein bill, Delivery address aur payment method confirm karo.\n"
+                f"7. Speak like a professional waiter, short and polite.\n"
+                f"7. Tum Kababjees ke salesman ho. Jawab hamesha 1-2 lines mein do.\n"
+                f"Agar koi price puche toh sirf price aur item ka naam batao, lambay paragraphs mat likho.\n"
+                f"Short, Professional aur To-the-point baat karo."
             )
             
             messages = [{"role": "system", "content": system_content}]
@@ -158,10 +142,36 @@ async def handle_msg(request: Request):
             completion = client_groq.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=messages,
-                temperature=0.2 # Lower for even more accuracy
+                temperature=0.2
             )
             ai_reply = completion.choices[0].message.content
             print(f"AI Response: {ai_reply}")
+
+            # =======================================================
+            # 🚀 FIXED STATE INJECTION LOOP (Groq Generation Ke Baad)
+            # =======================================================
+            bot_reply = ai_reply 
+
+            existing_session = None
+            for order in orders_db:
+                if order["customer_phone"] == user_phone:
+                    existing_session = order
+                    break
+            
+            if existing_session:
+                existing_session["user_text"] = existing_session.get("user_text", "") + f"\n\nCustomer: {user_text}"
+                existing_session["ai_text"] = existing_session.get("ai_text", "") + f"\n\nSana AI: {bot_reply}"
+            else:
+                orders_db.append({
+                    "id": len(orders_db) + 1,
+                    "customer_phone": user_phone,
+                    "items_detected": "Pending Input...", 
+                    "bill_amount": "0",                  
+                    "user_text": user_text,
+                    "ai_text": bot_reply,
+                    "status": "In Progress"
+                })
+            # =======================================================
 
             # 4. Conversation Database mein Save karna
             new_conv = models.Conversation(
@@ -270,7 +280,9 @@ def get_db_response(user_text):
             f"\n5. UPSELL: Main item ke baad pucho: 'Sir, iske sath Raita, Fries ya Cold drink add karni hai?'"
             f"\n6. ORDER SUMMARY: Aakhir mein bill, Delivery address aur payment method confirm karo."
             f"\n7. Speak like a professional waiter, short and polite."
-            f"\n7. Tum Kababjees ke salesman ho. Jawab hamesha 1-2 lines mein do. Agar koi price puche toh sirf price aur item ka naam batao, lambay paragraphs mat likho. Short, Professional aur To-the-point baat karo."
+            f"\n7. Tum Kababjees ke salesman ho. Jawab hamesha 1-2 lines mein do."
+            f"\nAgar koi price puche toh sirf price aur item ka naam batao, lambay paragraphs mat likho."
+            f"\nShort, Professional aur To-the-point baat karo."
         )
 
         messages = [{"role": "system", "content": system_content}]
@@ -309,7 +321,6 @@ async def voice_callback():
     response.say("Assalam-o-Alaikum! Kababjees VocalDesk mein khush amdeed. Main aapki kya madad kar sakta hoon?", 
                  voice='polly.Aditi', language='hi-IN')
     
-    # User ki baat sun'ne ke liye 'Gather'
     gather = response.gather(input='speech', action='/handle-call', language='ur-PK', timeout=3)
     return HTMLResponse(content=str(response), media_type="application/xml")
 
@@ -319,34 +330,29 @@ async def handle_call(SpeechResult: str = Form(None)):
     
     if SpeechResult:
         print(f"Customer ne kaha: {SpeechResult}")
-        # Yahan aapka database wala function call hoga
         answer = get_db_response(SpeechResult) 
         
         response.say(answer, voice='polly.Aditi', language='hi-IN')
         
-        # Agli baat sun'ne ke liye
         response.gather(input='speech', action='/handle-call', language='ur-PK', timeout=3)
     else:
         response.say("Maaf kijiyega, mujhe aapki awaaz nahi aayi.")
         response.redirect('/voice')
-        
+         
     return HTMLResponse(content=str(response), media_type="application/xml")
 
 @app.post("/voice")
 async def voice_endpoint():
     response = VoiceResponse()
     
-    # 1. Welcome Message
     response.say("Assalam-o-alaikum Captain! VocalDesk mein khush amdeed. Main Kababjees ka AI assistant hoon.", voice='Polly.Aditi', language='hi-IN')
     
-    # 2. User ki baat sunne ke liye (Gather)
-    # Is se call band nahi hogi, ye 5 seconds tak aapka intezar karega
     gather = Gather(input='speech', action='/handle-response', speechTimeout='auto')
     gather.say("Main aapki kya madad kar sakta hoon? Aap menu ya order status ke baare mein puch sakte hain.", voice='Polly.Aditi', language='hi-IN')
     response.append(gather)
 
     return Response(content=str(response), media_type="application/xml")
-# Windows Multi-processing fix
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
