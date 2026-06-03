@@ -70,17 +70,22 @@ async def handle_msg(request: Request):
                     existing_session = order
                     break
             
+            # Yahan bot ka live reply fetch karwayein jo aapka model generate krta he
+            bot_reply = "Processing your request..." # Agar aapka real AI model reply object bana he toh usey yahan assign krein
+            
             if existing_session:
-                existing_session["user_text"] = user_text
-                existing_session["ai_text"] = "Processing your request..." 
+                # Purane message ko mitane ke bajaye new line character (\n\n) ke sath jor dain
+                existing_session["user_text"] = existing_session.get("user_text", "") + f"\n\nCustomer: {user_text}"
+                existing_session["ai_text"] = existing_session.get("ai_text", "") + f"\n\nSana AI: {bot_reply}"
             else:
+                # Pehla message aane par naya core node session banayein
                 orders_db.append({
                     "id": len(orders_db) + 1,
                     "customer_phone": user_phone,
                     "items_detected": "Pending Input...", 
                     "bill_amount": "0",                  
                     "user_text": user_text,
-                    "ai_text": "VocalDesk AI is typing...",
+                    "ai_text": bot_reply,
                     "status": "In Progress"
                 })
             # --------------------------------------------------
