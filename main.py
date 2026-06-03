@@ -71,7 +71,7 @@ async def handle_msg(request: Request):
                     break
             
             # Yahan bot ka live reply fetch karwayein jo aapka model generate krta he
-            bot_reply = "Processing your request..." # Agar aapka real AI model reply object bana he toh usey yahan assign krein
+            bot_reply = ai_reply # Agar aapka real AI model reply object bana he toh usey yahan assign krein
             
             if existing_session:
                 # Purane message ko mitane ke bajaye new line character (\n\n) ke sath jor dain
