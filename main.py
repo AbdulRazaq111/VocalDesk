@@ -2,7 +2,9 @@ import os
 import models
 from database import engine, get_db
 from sqlalchemy.orm import Session
-from elevenlabs.client import ElevenLabs
+# ElevenLabs remove karke Google GenAI import kiya hai
+from google import genai
+from google.genai import types
 import requests
 from fastapi import FastAPI, Request, Form, Response
 from dotenv import load_dotenv
@@ -29,9 +31,11 @@ models.Base.metadata.create_all(bind=engine)
 # Groq Client Setup
 client_groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
+# Google Gemini Client Setup (Render par GEMINI_API_KEY lagani hogi)
+client_gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
-client_eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 
 @app.get("/webhook")
@@ -186,11 +190,11 @@ async def handle_msg(request: Request):
             # 5. WhatsApp Text Reply
             send_text(user_phone, ai_reply)
 
-            # 6. ElevenLabs Voice Note (Voice on karne ke liye sirf uncomment karein)
+            # 6. Google Gemini Voice Note System (Fully Active 🚀)
             if ai_reply:
-                audio_file = generate_voice_eleven(ai_reply)
+                audio_file = generate_voice_gemini(ai_reply)
                 if audio_file:
-                 send_audio(user_phone, audio_file)
+                    send_audio(user_phone, audio_file)
             
     except Exception as e:
         print(f"Error in handle_msg: {e}")
@@ -199,7 +203,7 @@ async def handle_msg(request: Request):
         
     return {"status": "ok"}
 
-# --- Helper Functions (Remaining untouched) ---
+# --- Helper Functions (Remaining untouched and updated) ---
 
 def send_text(to, text):
     url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
@@ -208,27 +212,31 @@ def send_text(to, text):
     response = requests.post(url, headers=headers, json=payload)
     print(f"WhatsApp Status: {response.status_code}")
 
-def generate_voice_eleven(text):
+def generate_voice_gemini(text):
+    """ElevenLabs ko makkhan ki tarah Google Gemini Multimodal Voice API se badal diya"""
     file_path = "reply_audio.mp3"
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
-        
-        voices_res = client_eleven.voices.get_all()
-        active_voice_id = voices_res.voices[0].voice_id 
-        
-        audio = client_eleven.text_to_speech.convert(
-            text=text,
-            voice_id=active_voice_id, 
-            model_id="eleven_multilingual_v2",
-            output_format="mp3_44100_128",
+            
+        # Gemini multimodal audio instruction
+        response = client_gemini.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=f"Please read this exact text aloud naturally in professional Roman Urdu/Hindi. Do not add any extra commentary: {text}",
+            config=types.GenerateContentConfig(
+                response_mime_type="audio/mp3"
+            ),
         )
-        with open(file_path, "wb") as f:
-            for chunk in audio:
-                f.write(chunk)
-        return file_path
+        
+        # Audio bytes extraction & saving
+        for part in response.candidates[0].content.parts:
+            if part.inline_data:
+                with open(file_path, "wb") as f:
+                    f.write(part.inline_data.data)
+                return file_path
+        return None
     except Exception as e:
-        print(f"ElevenLabs Error: {e}")
+        print(f"Google Gemini Voice Generation Error: {e}")
         return None
 
 def send_audio(to, audio_path):
