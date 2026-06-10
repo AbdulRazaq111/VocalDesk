@@ -11,3 +11,4 @@ elevenlabs
 groq
 twilio
 google-genai
+gTTS
