@@ -245,18 +245,45 @@ def generate_voice_gemini(text):
         return None
 
 def send_audio(to, audio_path):
+    """WhatsApp Audio Payload Setup - Fixed Meta Multipart Format"""
     url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/media"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-    files = {'file': (audio_path, open(audio_path, 'rb'), 'audio/mpeg'), 'messaging_product': (None, 'whatsapp')}
-    res = requests.post(url, headers=headers, files=files)
-    media_id = res.json().get('id')
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}"
+        # NOTE: Content-Type header yahan nahi dalna, requests library khud boundary set karegi
+    }
+    
+    try:
+        print(f"Sending audio file to Meta Media API: {audio_path}")
+        
+        # File object ko sahi multipart tuple format mein handle karna
+        with open(audio_path, 'rb') as f:
+            files = {
+                'file': (os.path.basename(audio_path), f, 'audio/mpeg'),
+                'messaging_product': (None, 'whatsapp')
+            }
+            res = requests.post(url, headers=headers, files=files)
+            
+        print(f"Meta Media Upload Response Status: {res.status_code}")
+        print(f"Meta Media Upload Body: {res.text}")
+        
+        media_id = res.json().get('id')
 
-    if media_id:
-        send_url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
-        payload = {"messaging_product": "whatsapp", "to": to, "type": "audio", "audio": {"id": media_id}}
-        requests.post(send_url, headers=headers, json=payload)
-        print("Voice note bhej diya!")
-
+        if media_id:
+            send_url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": to,
+                "type": "audio",
+                "audio": {"id": media_id}
+            }
+            message_res = requests.post(send_url, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}, json=payload)
+            print(f"WhatsApp Audio Message Status: {message_res.status_code}")
+            print(f"WhatsApp Audio Message Body: {message_res.text}")
+        else:
+            print("ERROR: Meta se Media ID nahi mili, audio send cancel.")
+            
+    except Exception as e:
+        print(f"CRITICAL send_audio function failure: {str(e)}")
 
 def get_db_response(user_text):
     db = next(get_db())
