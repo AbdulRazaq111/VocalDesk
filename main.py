@@ -213,27 +213,27 @@ def send_text(to, text):
     print(f"WhatsApp Status: {response.status_code}")
 
 def generate_voice_gemini(text):
-    """ElevenLabs ko makkhan ki tarah Google Gemini Multimodal Voice API se badal diya"""
+    """Google Gemini Model Se Safe Text-to-Speech Flow"""
     file_path = "reply_audio.mp3"
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
             
-        # Gemini multimodal audio instruction
+        # Standard stable audio/speech instruction request
         response = client_gemini.models.generate_content(
             model='gemini-1.5-flash',
-            contents=f"Please read this exact text aloud naturally in professional Roman Urdu/Hindi. Do not add any extra commentary: {text}",
-            config=types.GenerateContentConfig(
-                response_mime_type="audio/mp3"
-            ),
+            contents=f"Convert this text into spoken audio note format and return the raw audio representation. Text: {text}",
         )
         
-        # Audio bytes extraction & saving
-        for part in response.candidates[0].content.parts:
-            if part.inline_data:
-                with open(file_path, "wb") as f:
-                    f.write(part.inline_data.data)
-                return file_path
+        # Audio parts check aur extraction
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, 'inline_data') and part.inline_data:
+                    with open(file_path, "wb") as f:
+                        f.write(part.inline_data.data)
+                    return file_path
+                    
+        print("Gemini response generated text but no inline audio data found. Falling back to safe engine.")
         return None
     except Exception as e:
         print(f"Google Gemini Voice Generation Error: {e}")
