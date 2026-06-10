@@ -213,30 +213,57 @@ def send_text(to, text):
     print(f"WhatsApp Status: {response.status_code}")
 
 def generate_voice_gemini(text):
-    """Google Gemini Model Se Safe Text-to-Speech Flow"""
+    """Google Gemini Native Multimodal Voice Generation (No gTTS, Pure Gemini 🚀)"""
     file_path = "reply_audio.mp3"
     try:
         if os.path.exists(file_path):
-            os.remove(file_path)
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
             
-        # Standard stable audio/speech instruction request
+        print(f"Gemini AI Voice generating for text: {text}")
+        
+        # Free tier par audio bytes lene ka sahi tarika: Prompt mein request karna
         response = client_gemini.models.generate_content(
             model='gemini-1.5-flash',
-            contents=f"Convert this text into spoken audio note format and return the raw audio representation. Text: {text}",
+            contents=(
+                f"You are a professional Text-to-Speech engine. "
+                f"Convert the following Roman Urdu text into natural human speech bytes. "
+                f"Do not return any text description, markdown, or commentary. "
+                f"Return ONLY the raw audio bytes or base64 representation of the audio file. "
+                f"Text to speak: {text}"
+            )
         )
         
-        # Audio parts check aur extraction
+        # Audio extraction parse logic
         if response.candidates and response.candidates[0].content.parts:
             for part in response.candidates[0].content.parts:
+                # Agar Gemini direct inline data response format bhej raha hai
                 if hasattr(part, 'inline_data') and part.inline_data:
                     with open(file_path, "wb") as f:
                         f.write(part.inline_data.data)
+                    print(f"Gemini Audio successfully created! Size: {os.path.getsize(file_path)} bytes")
                     return file_path
-                    
-        print("Gemini response generated text but no inline audio data found. Falling back to safe engine.")
+                
+                # Agar response text base64 ya direct content mein hai
+                elif part.text:
+                    import base64
+                    try:
+                        # Clean code block indicators if any
+                        clean_text = part.text.replace("```", "").strip()
+                        audio_data = base64.b64decode(clean_text)
+                        with open(file_path, "wb") as f:
+                            f.write(audio_data)
+                        print(f"Gemini Audio decoded from base64! Size: {os.path.getsize(file_path)} bytes")
+                        return file_path
+                    except Exception:
+                        pass
+
+        print("Gemini response received, but could not extract raw audio bytes.")
         return None
     except Exception as e:
-        print(f"Google Gemini Voice Generation Error: {e}")
+        print(f"CRITICAL Gemini Voice Generation Error: {str(e)}")
         return None
 
 def send_audio(to, audio_path):
