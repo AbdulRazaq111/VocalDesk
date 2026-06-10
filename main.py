@@ -363,4 +363,6 @@ async def voice_endpoint():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=10000)
+    # Render ke dynamic PORT variable ko read karne ke liye int(os.getenv("PORT", 10000)) use karenge
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
