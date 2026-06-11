@@ -2,9 +2,7 @@ import os
 import models
 from database import engine, get_db
 from sqlalchemy.orm import Session
-# ElevenLabs remove karke Google GenAI import kiya hai
-from google import genai
-from google.genai import types
+from elevenlabs.client import ElevenLabs
 import requests
 from fastapi import FastAPI, Request, Form, Response
 from dotenv import load_dotenv
@@ -31,12 +29,21 @@ models.Base.metadata.create_all(bind=engine)
 # Groq Client Setup
 client_groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# Google Gemini Client Setup (Render par GEMINI_API_KEY lagani hogi)
-client_gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
+client_eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
+
+#FRONTED 
+
+@app.get("/", response_class=HTMLResponse)
+async def read_frontend():
+    file_path = os.path.join("templates", "index.html")
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    return "VocalDesk Backend is Live! index.html was not found inside 'templates/' folder."
+
 
 @app.get("/webhook")
 async def verify(request: Request):
@@ -190,11 +197,11 @@ async def handle_msg(request: Request):
             # 5. WhatsApp Text Reply
             send_text(user_phone, ai_reply)
 
-            # 6. Google Gemini Voice Note System (Fully Active 🚀)
+            # 6. ElevenLabs Voice Note (Voice on karne ke liye sirf uncomment karein)
             if ai_reply:
-                audio_file = generate_voice_gemini(ai_reply)
+                audio_file = generate_voice_eleven(ai_reply)
                 if audio_file:
-                    send_audio(user_phone, audio_file)
+                 send_audio(user_phone, audio_file)
             
     except Exception as e:
         print(f"Error in handle_msg: {e}")
@@ -203,7 +210,7 @@ async def handle_msg(request: Request):
         
     return {"status": "ok"}
 
-# --- Helper Functions (Remaining untouched and updated) ---
+# --- Helper Functions (Remaining untouched) ---
 
 def send_text(to, text):
     url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
@@ -212,90 +219,42 @@ def send_text(to, text):
     response = requests.post(url, headers=headers, json=payload)
     print(f"WhatsApp Status: {response.status_code}")
 
-def generate_voice_gemini(text):
-    """Google Stable Text-to-Speech Engine - Zero Blocks, Perfect Urdu Accent"""
+def generate_voice_eleven(text):
     file_path = "reply_audio.mp3"
     try:
-        from gtts import gTTS
-        import os
-        
-        # Purani file saaf karna
         if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception:
-                pass
-            
-        print(f"Generating Urdu Audio note for: {text}")
+            os.remove(file_path)
         
-        # Roman Urdu text ko clean native Urdu Accent ('ur') mein convert karega
-        tts = gTTS(text=text, lang='ur', slow=False)
-        tts.save(file_path)
+        voices_res = client_eleven.voices.get_all()
+        active_voice_id = voices_res.voices[0].voice_id 
         
-        # File confirmation logs
-        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-            print(f"Urdu voice successfully generated! Size: {os.path.getsize(file_path)} bytes")
-            return file_path
-        else:
-            print("Audio file creation failed or empty.")
-            return None
-            
+        audio = client_eleven.text_to_speech.convert(
+            text=text,
+            voice_id=active_voice_id, 
+            model_id="eleven_multilingual_v2",
+            output_format="mp3_44100_128",
+        )
+        with open(file_path, "wb") as f:
+            for chunk in audio:
+                f.write(chunk)
+        return file_path
     except Exception as e:
-        print(f"CRITICAL Stable Voice Generation Failure: {str(e)}")
+        print(f"ElevenLabs Error: {e}")
         return None
 
 def send_audio(to, audio_path):
-    """WhatsApp Audio Payload Setup - Robust Buffer Stream"""
-    import os
-    import requests
-
     url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/media"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}"
-    }
-    
-    try:
-        if not os.path.exists(audio_path):
-            print(f"ERROR: Audio file path does not exist locally: {audio_path}")
-            return
-            
-        print(f"Sending audio file to Meta Media API: {audio_path} (Size: {os.path.getsize(audio_path)} bytes)")
-        
-        # Binary bytes read block for multipart/form-data matching Meta requirements
-        with open(audio_path, 'rb') as f:
-            audio_bytes = f.read()
-            
-        files = {
-            'file': (os.path.basename(audio_path), audio_bytes, 'audio/mpeg'),
-            'messaging_product': (None, 'whatsapp')
-        }
-        
-        res = requests.post(url, headers=headers, files=files)
-        print(f"Meta Media Upload Response Status: {res.status_code}")
-        print(f"Meta Media Upload Body: {res.text}")
-        
-        media_id = res.json().get('id')
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    files = {'file': (audio_path, open(audio_path, 'rb'), 'audio/mpeg'), 'messaging_product': (None, 'whatsapp')}
+    res = requests.post(url, headers=headers, files=files)
+    media_id = res.json().get('id')
 
-        if media_id:
-            send_url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
-            payload = {
-                "messaging_product": "whatsapp",
-                "to": to,
-                "type": "audio",
-                "audio": {"id": media_id}
-            }
-            message_res = requests.post(
-                send_url, 
-                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}, 
-                json=payload
-            )
-            print(f"WhatsApp Audio Message Status: {message_res.status_code}")
-            print(f"WhatsApp Audio Message Body: {message_res.text}")
-        else:
-            print("ERROR: Meta did not return a valid Media ID from the bytes stream.")
-            
-    except Exception as e:
-        print(f"CRITICAL send_audio function failure: {str(e)}")
+    if media_id:
+        send_url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
+        payload = {"messaging_product": "whatsapp", "to": to, "type": "audio", "audio": {"id": media_id}}
+        requests.post(send_url, headers=headers, json=payload)
+        print("Voice note bhej diya!")
+
 
 def get_db_response(user_text):
     db = next(get_db())
@@ -407,6 +366,4 @@ async def voice_endpoint():
 
 if __name__ == "__main__":
     import uvicorn
-    # Render ke dynamic PORT variable ko read karne ke liye int(os.getenv("PORT", 10000)) use karenge
-    port = int(os.getenv("PORT", 10000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    uvicorn.run("main:app", host="0.0.0.0", port=10000)
