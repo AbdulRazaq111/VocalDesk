@@ -86,24 +86,38 @@ async def handle_msg(request: Request):
                 button_id = msg_obj['interactive']['button_reply']['id']
                 
                 if button_id == "yes":
-                    for order in orders_db:
-                        if order["customer_phone"] == user_phone:
-                            order["status"] = "Confirmed"
-                            receipt = generate_kababjees_receipt(
-                                order["id"],
-                                user_phone,
-                                order["items_detected"],
-                                order["bill_amount"],
-                                order.get("payment_method", "Cash On Delivery"),
-                                order.get("delivery_address", "")
-                            )
-                            send_text(user_phone, receipt)
-                            return {"status": "success"}
+                    # Latest active order ko confirm karna hai, purane orders ko nahi
+                    active_orders = [
+                        order for order in orders_db
+                        if order.get("customer_phone") == user_phone and order.get("status") == "In Progress"
+                    ]
+                    if not active_orders:
+                        active_orders = [
+                            order for order in orders_db
+                            if order.get("customer_phone") == user_phone
+                        ]
+
+                    if active_orders:
+                        order = active_orders[-1]
+                        order["status"] = "Confirmed"
+                        receipt = generate_kababjees_receipt(
+                            order["id"],
+                            user_phone,
+                            order.get("items_detected", "Order details pending"),
+                            order.get("bill_amount", "0"),
+                            order.get("payment_method", "Cash On Delivery"),
+                            order.get("delivery_address", "")
+                        )
+                        send_text(user_phone, receipt)
+                        return {"status": "success"}
                             
                 elif button_id == "no":
-                    for order in orders_db:
-                        if order["customer_phone"] == user_phone:
-                            order["status"] = "Cancelled"
+                    active_orders = [
+                        order for order in orders_db
+                        if order.get("customer_phone") == user_phone and order.get("status") == "In Progress"
+                    ]
+                    if active_orders:
+                        active_orders[-1]["status"] = "Cancelled"
                     send_text(user_phone, "Maaf kijiyega, aapka Kababjees order cancel kar diya gaya hai. Agar aap dobara order karna chahein toh 'Hi' likh kar start karein.")
                     return {"status": "success"}
 
@@ -113,20 +127,22 @@ async def handle_msg(request: Request):
             if user_text.lower() in greetings:
                 welcome_reply = "Asalam-o-Likum! Kababjees mein khush amdeed. Main apka order lene ke liye hazir hon. Aaj aap kya khana pasand karenge?"
                 
-                existing_session = next((order for order in orders_db if order["customer_phone"] == user_phone), None)
-                if existing_session:
-                    existing_session["user_text"] = existing_session.get("user_text", "") + f"\n\nCustomer: {user_text}"
-                    existing_session["ai_text"] = existing_session.get("ai_text", "") + f"\n\nSana AI: {welcome_reply}"
-                else:
-                    orders_db.append({
-                        "id": len(orders_db) + 1,
-                        "customer_phone": user_phone,
-                        "items_detected": "Pending Input...",
-                        "bill_amount": "0",
-                        "user_text": user_text,
-                        "ai_text": welcome_reply,
-                        "status": "In Progress"
-                    })
+                # New Hi/start par fresh order session create hoga; purane active sessions archive ho jayenge
+                for order in orders_db:
+                    if order.get("customer_phone") == user_phone and order.get("status") == "In Progress":
+                        order["status"] = "Archived"
+
+                orders_db.append({
+                    "id": len(orders_db) + 1,
+                    "customer_phone": user_phone,
+                    "items_detected": "Pending Input...",
+                    "bill_amount": "0",
+                    "user_text": user_text,
+                    "ai_text": welcome_reply,
+                    "status": "In Progress",
+                    "payment_method": "Cash On Delivery",
+                    "delivery_address": ""
+                })
 
                 send_text(user_phone, welcome_reply)
                 return {"status": "success"}
@@ -214,7 +230,6 @@ async def handle_msg(request: Request):
 
             # --- 🎯 STABLE TAG IDENTIFICATION INTERACTIVE SWITCH ---
             if "[order_done]" in ai_reply.lower():
-                # Clean clean response string by stripping out structural technical tags
                 clean_reply = ai_reply.replace("[ORDER_DONE]", "").replace("[order_done]", "").strip()
                 clean_reply_lower = clean_reply.lower()
 
@@ -232,12 +247,16 @@ async def handle_msg(request: Request):
                 else:
                     parsed_items, parsed_subtotal, parsed_payment, parsed_address = extract_order_details(clean_reply)
 
-                    for order in orders_db:
-                        if order["customer_phone"] == user_phone:
-                            order["items_detected"] = parsed_items
-                            order["bill_amount"] = parsed_subtotal
-                            order["payment_method"] = parsed_payment
-                            order["delivery_address"] = parsed_address
+                    active_orders = [
+                        order for order in orders_db
+                        if order.get("customer_phone") == user_phone and order.get("status") == "In Progress"
+                    ]
+                    if active_orders:
+                        order = active_orders[-1]
+                        order["items_detected"] = parsed_items
+                        order["bill_amount"] = parsed_subtotal
+                        order["payment_method"] = parsed_payment
+                        order["delivery_address"] = parsed_address
 
                     send_whatsapp_buttons(user_phone, clean_reply)
             else:
@@ -309,8 +328,26 @@ def extract_order_details(summary_text):
         if not line:
             continue
 
-        # Example: 2x Chicken Burger - Rs. 700
-        item_match = re.search(r'^(\d+\s*x?\s+.+?)\s*-\s*Rs\.?\s*(\d+)', line, re.IGNORECASE)
+        line_lower = line.lower()
+
+        if line_lower.startswith("payment:"):
+            payment_method = line.split(":", 1)[1].strip() or payment_method
+            continue
+
+        if line_lower.startswith("address:"):
+            delivery_address = line.split(":", 1)[1].strip()
+            continue
+
+        total_match = re.search(r'(subtotal|total bill|total)\s*:?.*?(?:rs\.?\s*)?(\d+)', line, re.IGNORECASE)
+        if total_match:
+            subtotal = int(total_match.group(2))
+            continue
+
+        # Examples:
+        # 2x Chicken Burger - Rs. 400
+        # 2x Chicken Burger - 400
+        # 2 Chicken Burger - Rs 400
+        item_match = re.search(r'^(\d+\s*x?\s+.+?)\s*-\s*(?:rs\.?\s*)?(\d+)', line, re.IGNORECASE)
         if item_match:
             item_name = item_match.group(1).strip()
             item_price = int(item_match.group(2))
@@ -318,20 +355,14 @@ def extract_order_details(summary_text):
             subtotal += item_price
             continue
 
-        total_match = re.search(r'(subtotal|total bill|total)\s*:?\s*Rs\.?\s*(\d+)', line, re.IGNORECASE)
-        if total_match:
-            subtotal = int(total_match.group(2))
-            continue
-
-        if line.lower().startswith("payment:"):
-            payment_method = line.split(":", 1)[1].strip() or payment_method
-
-        if line.lower().startswith("address:"):
-            delivery_address = line.split(":", 1)[1].strip()
+    # Agar item lines se subtotal nahi nikla, to text me numbers se final total nikalne ki backup try
+    if subtotal == 0:
+        numbers = re.findall(r'(?:subtotal|total bill|total|bill|rs\.?)\s*(?:is|hai|:)?\s*(?:rs\.?\s*)?(\d+)', summary_text.lower())
+        if numbers:
+            subtotal = max(int(n) for n in numbers)
 
     items_text = "\n".join(items) if items else "Order details pending"
     return items_text, str(subtotal), payment_method, delivery_address
-
 
 def generate_kababjees_receipt(order_id, customer_phone, items_text, amount, payment_method="Cash On Delivery", delivery_address=""):
     """Receipt ka standard layout text structure jo WhatsApp par land karega"""
