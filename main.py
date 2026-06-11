@@ -59,7 +59,7 @@ async def get_all_orders():
     return orders_db
 
 
-@@app.post("/webhook")
+@app.post("/webhook")
 async def handle_msg(request: Request):
     global orders_db  # <-- 4 spaces ke sath data ke bilkul upar
     
@@ -226,7 +226,7 @@ def send_text(to, text):
 
 
 def send_whatsapp_buttons(to, text_body):
-    """Meta Interactive Protocol Object Alignment Lock"""
+    """Meta Interactive Protocol: String length locked under 20 chars limit"""
     url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}", 
@@ -247,11 +247,11 @@ def send_whatsapp_buttons(to, text_body):
                 "buttons": [
                     {
                         "type": "reply", 
-                        "reply": {"id": "yes", "title": "Yes, Confirm ✓"}
+                        "reply": {"id": "yes", "title": "Confirm Order"} # Under 20 chars limit
                     },
                     {
                         "type": "reply", 
-                        "reply": {"id": "no", "title": "No, Cancel ✗"}
+                        "reply": {"id": "no", "title": "Cancel"} # Under 20 chars limit
                     }
                 ]
             }
@@ -259,7 +259,6 @@ def send_whatsapp_buttons(to, text_body):
     }
     res = requests.post(url, headers=headers, json=payload)
     print(f"Meta Trigger Status: {res.status_code} | Payload Response: {res.text}")
-
 
 def generate_kababjees_receipt(order_id, customer_phone, items_text, amount):
     """Receipt ka standard layout text structure jo WhatsApp par land karega"""
