@@ -198,10 +198,10 @@ async def handle_msg(request: Request):
             send_text(user_phone, ai_reply)
 
             # 6. ElevenLabs Voice Note (Voice on karne ke liye sirf uncomment karein)
-            if ai_reply:
-                audio_file = generate_voice_eleven(ai_reply)
-                if audio_file:
-                 send_audio(user_phone, audio_file)
+           # if ai_reply:
+              #  audio_file = generate_voice_eleven(ai_reply)
+                #if audio_file:
+                 #send_audio(user_phone, audio_file)
             
     except Exception as e:
         print(f"Error in handle_msg: {e}")
