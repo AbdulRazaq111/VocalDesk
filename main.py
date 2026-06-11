@@ -217,12 +217,28 @@ async def handle_msg(request: Request):
     return {"status": "ok"}
 
 
-def send_text(to, text):
+def send_text(to, text): 
     url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text}}
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        "text": {"body": text}
+    }
+
     response = requests.post(url, headers=headers, json=payload)
-    print(f"WhatsApp Status: {response.status_code}")
+
+    print("PHONE_ID:", PHONE_ID)
+    print("TOKEN EXISTS:", bool(WHATSAPP_TOKEN))
+    print("TOKEN START:", WHATSAPP_TOKEN[:10] if WHATSAPP_TOKEN else "NO TOKEN")
+    print("WhatsApp Status:", response.status_code)
+    print("WhatsApp Response:", response.text)
 
 
 def send_whatsapp_buttons(to, text_body):
@@ -288,6 +304,7 @@ def generate_kababjees_receipt(order_id, customer_phone, items_text, amount):
         f"Thank you for choosing Kababjees!"
     )
     return receipt_text
+
 
 
 def generate_voice_eleven(text):
