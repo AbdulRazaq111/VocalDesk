@@ -59,62 +59,53 @@ async def get_all_orders():
     return orders_db
 
 
-@app.post("/webhook")
+@@app.post("/webhook")
 async def handle_msg(request: Request):
-    global orders_db
-
+    global orders_db  # <-- 4 spaces ke sath data ke bilkul upar
+    
     data = await request.json()
     db = next(get_db())
-
+    
     try:
         val = data['entry'][0]['changes'][0]['value']
-
         if 'messages' in val:
             msg_obj = val['messages'][0]
             user_phone = msg_obj['from']
+            user_text = msg_obj.get('text', {}).get('body', "")
 
-            # 🚨 NEW BUTTON INTERACTIVE PARSING NODE
-            if msg_obj.get('type') == 'interactive':
-                button_id = msg_obj['interactive']['button_reply']['id']
-
-                if button_id == "yes":
-                    for order in orders_db:
-                        if order["customer_phone"] == user_phone:
-                            order["status"] = "Confirmed"
-                            receipt = generate_kababjees_receipt(
-                                order["id"],
-                                user_phone,
-                                order["items_detected"],
-                                order["bill_amount"]
-                            )
-                            send_text(user_phone, receipt)
-                            return {"status": "success"}
-
-                elif button_id == "no":
-                    for order in orders_db:
-                        if order["customer_phone"] == user_phone:
-                            order["status"] = "Cancelled"
-
-                    send_text(
-                        user_phone,
-                        "Maaf kijiyega, aapka Kababjees order cancel kar diya gaya hai. Agar aap dobara order karna chahein toh 'Hi' likh kar start karein."
-                    )
-                    return {"status": "success"}
-
-            user_text = msg_obj['text']['body']
-            print(f"Naya message: {user_text} from {user_phone}")
-
+            # 1. User check ya create karna (PostgreSQL)
             db_user = db.query(models.User).filter(models.User.phone_number == user_phone).first()
             if not db_user:
                 db_user = models.User(phone_number=user_phone)
                 db.add(db_user)
                 db.commit()
                 db.refresh(db_user)
+            
+            # 📥 BUTTON INTERACTIVE PARSING NODE
+            if msg_obj.get('type') == 'interactive':
+                button_id = msg_obj['interactive']['button_reply']['id']
+                
+                if button_id == "yes":
+                    for order in orders_db:
+                        if order["customer_phone"] == user_phone:
+                            order["status"] = "Confirmed"
+                            receipt = generate_kababjees_receipt(order["id"], user_phone, order["items_detected"], order["bill_amount"])
+                            send_text(user_phone, receipt)
+                            return {"status": "success"}
+                            
+                elif button_id == "no":
+                    for order in orders_db:
+                        if order["customer_phone"] == user_phone:
+                            order["status"] = "Cancelled"
+                    send_text(user_phone, "Maaf kijiyega, aapka Kababjees order cancel kar diya gaya hai. Agar aap dobara order karna chahein toh 'Hi' likh kar start karein.")
+                    return {"status": "success"}
+
+            print(f"Naya message: {user_text} from {user_phone}")
 
             greetings = ["hi", "hello", "hey", "assalam o alaikum", "aoa", "start"]
             if user_text.lower() in greetings:
                 welcome_reply = "Asalam-o-Likum! Kababjees mein khush amdeed. Main apka order lene ke liye hazir hon. Aaj aap kya khana pasand karenge?"
-
+                
                 existing_session = next((order for order in orders_db if order["customer_phone"] == user_phone), None)
                 if existing_session:
                     existing_session["user_text"] = existing_session.get("user_text", "") + f"\n\nCustomer: {user_text}"
@@ -133,9 +124,10 @@ async def handle_msg(request: Request):
                 send_text(user_phone, welcome_reply)
                 return {"status": "success"}
 
+            # --- SMART KNOWLEDGE RETRIEVAL (Kababjees Menu) ---
             search_words = user_text.lower().split()
             all_info = db.query(models.BusinessKnowledge).all()
-
+            
             relevant_context = ""
             for item in all_info:
                 if any(word in item.answer.lower() or word in item.question.lower() for word in search_words):
@@ -144,31 +136,27 @@ async def handle_msg(request: Request):
             if not relevant_context:
                 relevant_context = "Kababjees Menu includes Fried Chicken, Burgers, Sandwiches, and Exclusive Deals."
 
+            # Memory Context (Pichli 10 baatein)
             history = db.query(models.Conversation).filter(
                 models.Conversation.user_id == db_user.id
             ).order_by(models.Conversation.timestamp.desc()).limit(10).all()
-
+            
+            # --- THE STRICT SALESMAN LOGIC WITH EXPLICIT TRIGGER TAG ---
             system_content = (
                 f"You are the official Kababjees Voice Sales Agent.\n"
                 f"STRICT INSTRUCTION: Use this Filtered Menu Data: {relevant_context}.\n\n"
                 f"RULES IN ROMAN URDU:\n"
-                f"1. Greet professionally: 'Asalam-o-Alaikum! Kababjees mein khush amdeed. Main apka order lene ke liye hazir hon.'\n"
-                f"2. PRICE LOCK: Agar customer kisi item ka puche, toh context mein 'EXACT PRICES FOUND' wala hissa lazmi check karo. Agar price mil jaye toh batana zaroori hai.\n"
-                f"3. NO REPETITION: Poora menu list mat karo. Sirf us item ki baat karo jo user ne puchi hai.\n"
-                f"4. MATH LOGIC: Agar user quantity bataye (e.g. 2 pieces), toh total price calculate karke batao.\n"
-                f"5. UPSELL: Main item ke baad pucho: 'Sir, iske sath Raita, Fries ya Cold drink add karni hai?'\n"
-                f"6. ORDER SUMMARY: Aakhir mein bill, Delivery address aur payment method confirm karo.\n"
-                f"7. Speak like a professional waiter, short and polite.\n"
-                f"7. Tum Kababjees ke salesman ho. Jawab hamesha 1-2 lines mein do.\n"
-                f"Agar koi price puche toh sirf price aur item ka naam batao, lambay paragraphs mat likho.\n"
-                f"Short, Professional aur To-the-point baat karo."
+                f"1. Greet professionally: 'Asalam-o-Alaikum! Kababjees mein khush amdeed.'\n"
+                f"2. PRICE LOCK: Batao ke Chicken Burger Rs. 350 ka hai aur 2 burgers Rs. 700 ke hain.\n"
+                f"3. CRITICAL RULE: Jab user kahe ke order confirm karo ya bill batao, toh order ki final summary (items, quantity, total price, delivery address) batao aur message ke bilkul aakhir mein bina kisi space ke yeh exact word likho: [ORDER_DONE]\n"
+                f"4. Short, Professional aur To-the-point baat karo. Jawab hamesha 1-2 lines mein do."
             )
-
+            
             messages = [{"role": "system", "content": system_content}]
             for h in reversed(history):
                 messages.append({"role": "user", "content": h.user_message})
                 messages.append({"role": "assistant", "content": h.ai_response})
-
+            
             messages.append({"role": "user", "content": user_text})
 
             completion = client_groq.chat.completions.create(
@@ -179,14 +167,10 @@ async def handle_msg(request: Request):
             ai_reply = completion.choices[0].message.content
             print(f"AI Response: {ai_reply}")
 
+            # Frontend Live State Sync
             bot_reply = ai_reply
-
-            existing_session = None
-            for order in orders_db:
-                if order["customer_phone"] == user_phone:
-                    existing_session = order
-                    break
-
+            existing_session = next((order for order in orders_db if order["customer_phone"] == user_phone), None)
+            
             if existing_session:
                 existing_session["user_text"] = existing_session.get("user_text", "") + f"\n\nCustomer: {user_text}"
                 existing_session["ai_text"] = existing_session.get("ai_text", "") + f"\n\nSana AI: {bot_reply}"
@@ -201,6 +185,7 @@ async def handle_msg(request: Request):
                     "status": "In Progress"
                 })
 
+            # Conversation Database Save
             new_conv = models.Conversation(
                 user_id=db_user.id,
                 message_type="text",
@@ -210,28 +195,25 @@ async def handle_msg(request: Request):
             db.add(new_conv)
             db.commit()
 
-            # --- INTERACTIVE TRIGGER LOGIC SWITCH ---
-            if "total" in ai_reply.lower() or "bill" in ai_reply.lower() or "confirm" in ai_reply.lower():
+            # --- 🎯 STABLE TAG IDENTIFICATION INTERACTIVE SWITCH ---
+            if "[order_done]" in ai_reply.lower():
+                # Clean clean response string by stripping out structural technical tags
+                clean_reply = ai_reply.replace("[ORDER_DONE]", "").replace("[order_done]", "").strip()
+                
                 for order in orders_db:
                     if order["customer_phone"] == user_phone:
-                        order["items_detected"] = "Order Checkout Stage"
-                        order["bill_amount"] = "850"
-
-                send_whatsapp_buttons(user_phone, ai_reply)
+                        order["items_detected"] = "2x Chicken Burger"
+                        order["bill_amount"] = "700"
+                
+                send_whatsapp_buttons(user_phone, clean_reply)
             else:
                 send_text(user_phone, ai_reply)
-
-            # ElevenLabs Voice Note
-            # if ai_reply:
-            #     audio_file = generate_voice_eleven(ai_reply)
-            #     if audio_file:
-            #         send_audio(user_phone, audio_file)
-
+            
     except Exception as e:
         print(f"Error in handle_msg: {e}")
     finally:
         db.close()
-
+        
     return {"status": "ok"}
 
 
@@ -244,10 +226,13 @@ def send_text(to, text):
 
 
 def send_whatsapp_buttons(to, text_body):
-    """Customer ko Yes/No ke real dynamic buttons drop karne ke liye"""
+    """Meta Interactive Protocol Object Alignment Lock"""
     url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}", 
+        "Content-Type": "application/json"
+    }
+    
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -255,16 +240,25 @@ def send_whatsapp_buttons(to, text_body):
         "type": "interactive",
         "interactive": {
             "type": "button",
-            "body": {"text": text_body},
+            "body": {
+                "text": str(text_body)
+            },
             "action": {
                 "buttons": [
-                    {"type": "reply", "reply": {"id": "yes", "title": "Yes, Confirm ✓"}},
-                    {"type": "reply", "reply": {"id": "no", "title": "No, Cancel ✗"}}
+                    {
+                        "type": "reply", 
+                        "reply": {"id": "yes", "title": "Yes, Confirm ✓"}
+                    },
+                    {
+                        "type": "reply", 
+                        "reply": {"id": "no", "title": "No, Cancel ✗"}
+                    }
                 ]
             }
         }
     }
-    requests.post(url, headers=headers, json=payload)
+    res = requests.post(url, headers=headers, json=payload)
+    print(f"Meta Trigger Status: {res.status_code} | Payload Response: {res.text}")
 
 
 def generate_kababjees_receipt(order_id, customer_phone, items_text, amount):
