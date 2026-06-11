@@ -23,10 +23,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database Tables Create Karna (Server start hote hi tables ban jayenge)
 models.Base.metadata.create_all(bind=engine)
 
-# Groq Client Setup
 client_groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
@@ -34,7 +32,6 @@ PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
 client_eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 
-#FRONTED 
 
 @app.get("/", response_class=HTMLResponse)
 async def read_frontend():
@@ -52,7 +49,9 @@ async def verify(request: Request):
         return Response(content=params.get("hub.challenge"), media_type="text/plain")
     return "Verification Failed"
 
+
 orders_db = []
+
 
 @app.get("/orders")
 async def get_all_orders():
@@ -62,33 +61,60 @@ async def get_all_orders():
 
 @app.post("/webhook")
 async def handle_msg(request: Request):
-    global orders_db  # <-- 4 spaces ke sath data ke bilkul upar
-    
+    global orders_db
+
     data = await request.json()
     db = next(get_db())
-    
+
     try:
         val = data['entry'][0]['changes'][0]['value']
+
         if 'messages' in val:
-            user_phone = val['messages'][0]['from']
-            user_text = val['messages'][0]['text']['body']
+            msg_obj = val['messages'][0]
+            user_phone = msg_obj['from']
+
+            # 🚨 NEW BUTTON INTERACTIVE PARSING NODE
+            if msg_obj.get('type') == 'interactive':
+                button_id = msg_obj['interactive']['button_reply']['id']
+
+                if button_id == "yes":
+                    for order in orders_db:
+                        if order["customer_phone"] == user_phone:
+                            order["status"] = "Confirmed"
+                            receipt = generate_kababjees_receipt(
+                                order["id"],
+                                user_phone,
+                                order["items_detected"],
+                                order["bill_amount"]
+                            )
+                            send_text(user_phone, receipt)
+                            return {"status": "success"}
+
+                elif button_id == "no":
+                    for order in orders_db:
+                        if order["customer_phone"] == user_phone:
+                            order["status"] = "Cancelled"
+
+                    send_text(
+                        user_phone,
+                        "Maaf kijiyega, aapka Kababjees order cancel kar diya gaya hai. Agar aap dobara order karna chahein toh 'Hi' likh kar start karein."
+                    )
+                    return {"status": "success"}
+
+            user_text = msg_obj['text']['body']
             print(f"Naya message: {user_text} from {user_phone}")
 
-            # 1. User check ya create karna (PostgreSQL)
             db_user = db.query(models.User).filter(models.User.phone_number == user_phone).first()
             if not db_user:
                 db_user = models.User(phone_number=user_phone)
                 db.add(db_user)
                 db.commit()
                 db.refresh(db_user)
-            
+
             greetings = ["hi", "hello", "hey", "assalam o alaikum", "aoa", "start"]
             if user_text.lower() in greetings:
-                #db.query(models.Message).filter(models.Message.user_id == db_user.id).delete()
-                #db.commit()
                 welcome_reply = "Asalam-o-Likum! Kababjees mein khush amdeed. Main apka order lene ke liye hazir hon. Aaj aap kya khana pasand karenge?"
-                
-                # Dynamic Sync to Presentation Ledger for Greetings
+
                 existing_session = next((order for order in orders_db if order["customer_phone"] == user_phone), None)
                 if existing_session:
                     existing_session["user_text"] = existing_session.get("user_text", "") + f"\n\nCustomer: {user_text}"
@@ -97,8 +123,8 @@ async def handle_msg(request: Request):
                     orders_db.append({
                         "id": len(orders_db) + 1,
                         "customer_phone": user_phone,
-                        "items_detected": "Pending Input...", 
-                        "bill_amount": "0",                  
+                        "items_detected": "Pending Input...",
+                        "bill_amount": "0",
                         "user_text": user_text,
                         "ai_text": welcome_reply,
                         "status": "In Progress"
@@ -107,11 +133,9 @@ async def handle_msg(request: Request):
                 send_text(user_phone, welcome_reply)
                 return {"status": "success"}
 
-
-            # --- SMART KNOWLEDGE RETRIEVAL (Kababjees Menu) ---
             search_words = user_text.lower().split()
             all_info = db.query(models.BusinessKnowledge).all()
-            
+
             relevant_context = ""
             for item in all_info:
                 if any(word in item.answer.lower() or word in item.question.lower() for word in search_words):
@@ -120,12 +144,10 @@ async def handle_msg(request: Request):
             if not relevant_context:
                 relevant_context = "Kababjees Menu includes Fried Chicken, Burgers, Sandwiches, and Exclusive Deals."
 
-            # 2. Memory Context (Pichli 10 baatein taake order yaad rahe)
             history = db.query(models.Conversation).filter(
                 models.Conversation.user_id == db_user.id
             ).order_by(models.Conversation.timestamp.desc()).limit(10).all()
-            
-            # --- THE STRICT SALESMAN LOGIC ---
+
             system_content = (
                 f"You are the official Kababjees Voice Sales Agent.\n"
                 f"STRICT INSTRUCTION: Use this Filtered Menu Data: {relevant_context}.\n\n"
@@ -141,15 +163,14 @@ async def handle_msg(request: Request):
                 f"Agar koi price puche toh sirf price aur item ka naam batao, lambay paragraphs mat likho.\n"
                 f"Short, Professional aur To-the-point baat karo."
             )
-            
+
             messages = [{"role": "system", "content": system_content}]
             for h in reversed(history):
                 messages.append({"role": "user", "content": h.user_message})
                 messages.append({"role": "assistant", "content": h.ai_response})
-            
+
             messages.append({"role": "user", "content": user_text})
 
-            # 3. Groq AI se Jawab lena
             completion = client_groq.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=messages,
@@ -158,17 +179,14 @@ async def handle_msg(request: Request):
             ai_reply = completion.choices[0].message.content
             print(f"AI Response: {ai_reply}")
 
-            # =======================================================
-            # 🚀 FIXED STATE INJECTION LOOP (Groq Generation Ke Baad)
-            # =======================================================
-            bot_reply = ai_reply 
+            bot_reply = ai_reply
 
             existing_session = None
             for order in orders_db:
                 if order["customer_phone"] == user_phone:
                     existing_session = order
                     break
-            
+
             if existing_session:
                 existing_session["user_text"] = existing_session.get("user_text", "") + f"\n\nCustomer: {user_text}"
                 existing_session["ai_text"] = existing_session.get("ai_text", "") + f"\n\nSana AI: {bot_reply}"
@@ -176,15 +194,13 @@ async def handle_msg(request: Request):
                 orders_db.append({
                     "id": len(orders_db) + 1,
                     "customer_phone": user_phone,
-                    "items_detected": "Pending Input...", 
-                    "bill_amount": "0",                  
+                    "items_detected": "Pending Input...",
+                    "bill_amount": "0",
                     "user_text": user_text,
                     "ai_text": bot_reply,
                     "status": "In Progress"
                 })
-            # =======================================================
 
-            # 4. Conversation Database mein Save karna
             new_conv = models.Conversation(
                 user_id=db_user.id,
                 message_type="text",
@@ -194,23 +210,30 @@ async def handle_msg(request: Request):
             db.add(new_conv)
             db.commit()
 
-            # 5. WhatsApp Text Reply
-            send_text(user_phone, ai_reply)
+            # --- INTERACTIVE TRIGGER LOGIC SWITCH ---
+            if "total" in ai_reply.lower() or "bill" in ai_reply.lower() or "confirm" in ai_reply.lower():
+                for order in orders_db:
+                    if order["customer_phone"] == user_phone:
+                        order["items_detected"] = "Order Checkout Stage"
+                        order["bill_amount"] = "850"
 
-            # 6. ElevenLabs Voice Note (Voice on karne ke liye sirf uncomment karein)
-           # if ai_reply:
-              #  audio_file = generate_voice_eleven(ai_reply)
-               # if audio_file:
-               #  send_audio(user_phone, audio_file)
-            
+                send_whatsapp_buttons(user_phone, ai_reply)
+            else:
+                send_text(user_phone, ai_reply)
+
+            # ElevenLabs Voice Note
+            # if ai_reply:
+            #     audio_file = generate_voice_eleven(ai_reply)
+            #     if audio_file:
+            #         send_audio(user_phone, audio_file)
+
     except Exception as e:
         print(f"Error in handle_msg: {e}")
     finally:
-        db.close() # Connection band karna zaroori hai
-        
+        db.close()
+
     return {"status": "ok"}
 
-# --- Helper Functions (Remaining untouched) ---
 
 def send_text(to, text):
     url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
@@ -219,18 +242,73 @@ def send_text(to, text):
     response = requests.post(url, headers=headers, json=payload)
     print(f"WhatsApp Status: {response.status_code}")
 
+
+def send_whatsapp_buttons(to, text_body):
+    """Customer ko Yes/No ke real dynamic buttons drop karne ke liye"""
+    url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": text_body},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "yes", "title": "Yes, Confirm ✓"}},
+                    {"type": "reply", "reply": {"id": "no", "title": "No, Cancel ✗"}}
+                ]
+            }
+        }
+    }
+    requests.post(url, headers=headers, json=payload)
+
+
+def generate_kababjees_receipt(order_id, customer_phone, items_text, amount):
+    """Receipt ka standard layout text structure jo WhatsApp par land karega"""
+    import datetime
+    current_date = datetime.datetime.now().strftime("%d/%m/%Y")
+
+    bill_amt = int(amount) if str(amount).isdigit() else 0
+    gst = int(bill_amt * 0.13)
+    total = bill_amt + gst
+
+    receipt_text = (
+        f"============================\n"
+        f"      KABABJEES AI AGENT\n"
+        f"============================\n"
+        f"Order ID: #00{order_id}\n"
+        f"Date: {current_date}\n"
+        f"Customer: {customer_phone}\n"
+        f"----------------------------\n"
+        f"ITEMS:\n{items_text}\n"
+        f"----------------------------\n"
+        f"SUBTOTAL:             Rs. {bill_amt}\n"
+        f"GST (13%):            Rs. {gst}\n"
+        f"TOTAL BILL:           Rs. {total}\n"
+        f"----------------------------\n"
+        f"Payment: Cash On Delivery\n"
+        f"Status: CONFIRMED ✓\n\n"
+        f"Thank you for choosing Kababjees!"
+    )
+    return receipt_text
+
+
 def generate_voice_eleven(text):
     file_path = "reply_audio.mp3"
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
-        
+
         voices_res = client_eleven.voices.get_all()
-        active_voice_id = voices_res.voices[0].voice_id 
-        
+        active_voice_id = voices_res.voices[0].voice_id
+
         audio = client_eleven.text_to_speech.convert(
             text=text,
-            voice_id=active_voice_id, 
+            voice_id=active_voice_id,
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
         )
@@ -241,6 +319,7 @@ def generate_voice_eleven(text):
     except Exception as e:
         print(f"ElevenLabs Error: {e}")
         return None
+
 
 def send_audio(to, audio_path):
     url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/media"
@@ -326,43 +405,58 @@ def get_db_response(user_text):
     finally:
         db.close()
 
+
 @app.post("/voice")
 async def voice_callback():
     response = VoiceResponse()
-    response.say("Assalam-o-Alaikum! Kababjees VocalDesk mein khush amdeed. Main aapki kya madad kar sakta hoon?", 
-                 voice='polly.Aditi', language='hi-IN')
-    
+    response.say(
+        "Assalam-o-Alaikum! Kababjees VocalDesk mein khush amdeed. Main aapki kya madad kar sakta hoon?",
+        voice='polly.Aditi',
+        language='hi-IN'
+    )
+
     gather = response.gather(input='speech', action='/handle-call', language='ur-PK', timeout=3)
     return HTMLResponse(content=str(response), media_type="application/xml")
+
 
 @app.post("/handle-call")
 async def handle_call(SpeechResult: str = Form(None)):
     response = VoiceResponse()
-    
+
     if SpeechResult:
         print(f"Customer ne kaha: {SpeechResult}")
-        answer = get_db_response(SpeechResult) 
-        
+        answer = get_db_response(SpeechResult)
+
         response.say(answer, voice='polly.Aditi', language='hi-IN')
-        
+
         response.gather(input='speech', action='/handle-call', language='ur-PK', timeout=3)
     else:
         response.say("Maaf kijiyega, mujhe aapki awaaz nahi aayi.")
         response.redirect('/voice')
-         
+
     return HTMLResponse(content=str(response), media_type="application/xml")
+
 
 @app.post("/voice")
 async def voice_endpoint():
     response = VoiceResponse()
-    
-    response.say("Assalam-o-alaikum Captain! VocalDesk mein khush amdeed. Main Kababjees ka AI assistant hoon.", voice='Polly.Aditi', language='hi-IN')
-    
+
+    response.say(
+        "Assalam-o-alaikum Captain! VocalDesk mein khush amdeed. Main Kababjees ka AI assistant hoon.",
+        voice='Polly.Aditi',
+        language='hi-IN'
+    )
+
     gather = Gather(input='speech', action='/handle-response', speechTimeout='auto')
-    gather.say("Main aapki kya madad kar sakta hoon? Aap menu ya order status ke baare mein puch sakte hain.", voice='Polly.Aditi', language='hi-IN')
+    gather.say(
+        "Main aapki kya madad kar sakta hoon? Aap menu ya order status ke baare mein puch sakte hain.",
+        voice='Polly.Aditi',
+        language='hi-IN'
+    )
     response.append(gather)
 
     return Response(content=str(response), media_type="application/xml")
+
 
 if __name__ == "__main__":
     import uvicorn
