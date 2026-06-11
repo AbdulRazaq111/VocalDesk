@@ -89,7 +89,14 @@ async def handle_msg(request: Request):
                     for order in orders_db:
                         if order["customer_phone"] == user_phone:
                             order["status"] = "Confirmed"
-                            receipt = generate_kababjees_receipt(order["id"], user_phone, order["items_detected"], order["bill_amount"])
+                            receipt = generate_kababjees_receipt(
+                                order["id"],
+                                user_phone,
+                                order["items_detected"],
+                                order["bill_amount"],
+                                order.get("payment_method", "Cash On Delivery"),
+                                order.get("delivery_address", "")
+                            )
                             send_text(user_phone, receipt)
                             return {"status": "success"}
                             
@@ -147,9 +154,19 @@ async def handle_msg(request: Request):
                 f"STRICT INSTRUCTION: Use this Filtered Menu Data: {relevant_context}.\n\n"
                 f"RULES IN ROMAN URDU:\n"
                 f"1. Greet professionally: 'Asalam-o-Alaikum! Kababjees mein khush amdeed.'\n"
-                f"2. PRICE LOCK: Batao ke Chicken Burger Rs. 350 ka hai aur 2 burgers Rs. 700 ke hain.\n"
-                f"3. CRITICAL RULE: Jab user kahe ke order confirm karo ya bill batao, toh order ki final summary (items, quantity, total price, delivery address) batao aur message ke bilkul aakhir mein bina kisi space ke yeh exact word likho: [ORDER_DONE]\n"
-                f"4. Short, Professional aur To-the-point baat karo. Jawab hamesha 1-2 lines mein do."
+                f"2. PRICE LOCK: Item prices sirf database/context se use karo. Fake ya hardcoded price mat do.\n"
+                f"3. Jab customer order items bataye, pehle items aur total confirm karo, phir address aur payment method mango.\n"
+                f"4. IMPORTANT: [ORDER_DONE] sirf tab lagana jab customer ka order, address aur payment method teeno confirm ho chuke hon. Agar address ya payment method missing ho toh [ORDER_DONE] bilkul mat lagana.\n"
+                f"5. Final order summary hamesha exactly is format mein do:\n"
+                f"ORDER SUMMARY:\n"
+                f"2x Chicken Burger - Rs. 700\n"
+                f"1x Cold Drink - Rs. 100\n"
+                f"Subtotal: Rs. 800\n"
+                f"Address: customer address\n"
+                f"Payment: Cash On Delivery\n"
+                f"[ORDER_DONE]\n"
+                f"6. Har item alag line mein quantity + item name + price ke sath likho.\n"
+                f"7. Short, Professional aur To-the-point baat karo."
             )
             
             messages = [{"role": "system", "content": system_content}]
@@ -199,15 +216,33 @@ async def handle_msg(request: Request):
             if "[order_done]" in ai_reply.lower():
                 # Clean clean response string by stripping out structural technical tags
                 clean_reply = ai_reply.replace("[ORDER_DONE]", "").replace("[order_done]", "").strip()
-                
-                for order in orders_db:
-                    if order["customer_phone"] == user_phone:
-                        order["items_detected"] = "2x Chicken Burger"
-                        order["bill_amount"] = "700"
-                
-                send_whatsapp_buttons(user_phone, clean_reply)
+                clean_reply_lower = clean_reply.lower()
+
+                # Safety: agar AI ne address/payment poochte hue galti se ORDER_DONE laga diya ho
+                asking_more_details = (
+                    "address kya" in clean_reply_lower or
+                    "payment method kya" in clean_reply_lower or
+                    "address aur payment" in clean_reply_lower or
+                    "address bhej" in clean_reply_lower or
+                    "payment method bat" in clean_reply_lower
+                )
+
+                if asking_more_details:
+                    send_text(user_phone, clean_reply)
+                else:
+                    parsed_items, parsed_subtotal, parsed_payment, parsed_address = extract_order_details(clean_reply)
+
+                    for order in orders_db:
+                        if order["customer_phone"] == user_phone:
+                            order["items_detected"] = parsed_items
+                            order["bill_amount"] = parsed_subtotal
+                            order["payment_method"] = parsed_payment
+                            order["delivery_address"] = parsed_address
+
+                    send_whatsapp_buttons(user_phone, clean_reply)
             else:
                 send_text(user_phone, ai_reply)
+
             
     except Exception as e:
         print(f"Error in handle_msg: {e}")
@@ -260,7 +295,45 @@ def send_whatsapp_buttons(to, text_body):
     res = requests.post(url, headers=headers, json=payload)
     print(f"Meta Trigger Status: {res.status_code} | Payload Response: {res.text}")
 
-def generate_kababjees_receipt(order_id, customer_phone, items_text, amount):
+def extract_order_details(summary_text):
+    """AI final summary se item-wise receipt data nikalne ke liye"""
+    import re
+
+    items = []
+    subtotal = 0
+    payment_method = "Cash On Delivery"
+    delivery_address = ""
+
+    for raw_line in summary_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # Example: 2x Chicken Burger - Rs. 700
+        item_match = re.search(r'^(\d+\s*x?\s+.+?)\s*-\s*Rs\.?\s*(\d+)', line, re.IGNORECASE)
+        if item_match:
+            item_name = item_match.group(1).strip()
+            item_price = int(item_match.group(2))
+            items.append(f"{item_name:<22} Rs. {item_price}")
+            subtotal += item_price
+            continue
+
+        total_match = re.search(r'(subtotal|total bill|total)\s*:?\s*Rs\.?\s*(\d+)', line, re.IGNORECASE)
+        if total_match:
+            subtotal = int(total_match.group(2))
+            continue
+
+        if line.lower().startswith("payment:"):
+            payment_method = line.split(":", 1)[1].strip() or payment_method
+
+        if line.lower().startswith("address:"):
+            delivery_address = line.split(":", 1)[1].strip()
+
+    items_text = "\n".join(items) if items else "Order details pending"
+    return items_text, str(subtotal), payment_method, delivery_address
+
+
+def generate_kababjees_receipt(order_id, customer_phone, items_text, amount, payment_method="Cash On Delivery", delivery_address=""):
     """Receipt ka standard layout text structure jo WhatsApp par land karega"""
     import datetime
     current_date = datetime.datetime.now().strftime("%d/%m/%Y")
@@ -269,6 +342,8 @@ def generate_kababjees_receipt(order_id, customer_phone, items_text, amount):
     gst = int(bill_amt * 0.13)
     total = bill_amt + gst
 
+    address_line = f"Address: {delivery_address}\n" if delivery_address else ""
+
     receipt_text = (
         f"============================\n"
         f"      KABABJEES AI AGENT\n"
@@ -276,6 +351,7 @@ def generate_kababjees_receipt(order_id, customer_phone, items_text, amount):
         f"Order ID: #00{order_id}\n"
         f"Date: {current_date}\n"
         f"Customer: {customer_phone}\n"
+        f"{address_line}"
         f"----------------------------\n"
         f"ITEMS:\n{items_text}\n"
         f"----------------------------\n"
@@ -283,7 +359,7 @@ def generate_kababjees_receipt(order_id, customer_phone, items_text, amount):
         f"GST (13%):            Rs. {gst}\n"
         f"TOTAL BILL:           Rs. {total}\n"
         f"----------------------------\n"
-        f"Payment: Cash On Delivery\n"
+        f"Payment: {payment_method}\n"
         f"Status: CONFIRMED ✓\n\n"
         f"Thank you for choosing Kababjees!"
     )
