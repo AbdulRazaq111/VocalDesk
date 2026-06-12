@@ -91,12 +91,6 @@ async def handle_msg(request: Request):
                         order for order in orders_db
                         if order.get("customer_phone") == user_phone and order.get("status") == "In Progress"
                     ]
-                    if not active_orders:
-                        active_orders = [
-                            order for order in orders_db
-                            if order.get("customer_phone") == user_phone
-                        ]
-
                     if active_orders:
                         order = active_orders[-1]
                         order["status"] = "Confirmed"
@@ -111,6 +105,9 @@ async def handle_msg(request: Request):
                         send_text(user_phone, receipt)
                         return {"status": "success"}
                             
+
+                    send_text(user_phone, "Maaf kijiyega, koi active order nahi mila. Fresh order ke liye \'Hi\' bhejein.")
+                    return {"status": "success"}
                 elif button_id == "no":
                     active_orders = [
                         order for order in orders_db
@@ -173,15 +170,15 @@ async def handle_msg(request: Request):
                 f"2. PRICE LOCK: Item prices sirf database/context se use karo. Fake ya hardcoded price mat do.\n"
                 f"3. Jab customer order items bataye, pehle items aur total confirm karo, phir address aur payment method mango.\n"
                 f"4. IMPORTANT: [ORDER_DONE] sirf tab lagana jab customer ka order, address aur payment method teeno confirm ho chuke hon. Agar address ya payment method missing ho toh [ORDER_DONE] bilkul mat lagana.\n"
-                f"5. Final order summary hamesha exactly is format mein do:\n"
+                f"5. Final order summary hamesha exactly is format mein do, item ko kabhi sentence mein merge mat karo:\n"
                 f"ORDER SUMMARY:\n"
-                f"2x Chicken Burger - Rs. 700\n"
+                f"2x Chicken Burger - Rs. 400\n"
                 f"1x Cold Drink - Rs. 100\n"
-                f"Subtotal: Rs. 800\n"
+                f"Subtotal: Rs. 500\n"
                 f"Address: customer address\n"
                 f"Payment: Cash On Delivery\n"
                 f"[ORDER_DONE]\n"
-                f"6. Har item alag line mein quantity + item name + price ke sath likho.\n"
+                f"6. Har item alag line mein quantity + item name + price ke sath likho. Total sirf Subtotal line mein likho.\n"
                 f"7. Short, Professional aur To-the-point baat karo."
             )
             
@@ -202,21 +199,31 @@ async def handle_msg(request: Request):
 
             # Frontend Live State Sync
             bot_reply = ai_reply
-            existing_session = next((order for order in orders_db if order["customer_phone"] == user_phone), None)
+
+            # Sirf latest active order session update karna hai.
+            # Purane Confirmed/Archived order ko touch nahi karna, warna receipt old order se ban jati hai.
+            active_sessions = [
+                order for order in orders_db
+                if order.get("customer_phone") == user_phone and order.get("status") == "In Progress"
+            ]
+            existing_session = active_sessions[-1] if active_sessions else None
             
             if existing_session:
                 existing_session["user_text"] = existing_session.get("user_text", "") + f"\n\nCustomer: {user_text}"
                 existing_session["ai_text"] = existing_session.get("ai_text", "") + f"\n\nSana AI: {bot_reply}"
             else:
-                orders_db.append({
+                existing_session = {
                     "id": len(orders_db) + 1,
                     "customer_phone": user_phone,
                     "items_detected": "Pending Input...",
                     "bill_amount": "0",
                     "user_text": user_text,
                     "ai_text": bot_reply,
-                    "status": "In Progress"
-                })
+                    "status": "In Progress",
+                    "payment_method": "Cash On Delivery",
+                    "delivery_address": ""
+                }
+                orders_db.append(existing_session)
 
             # Conversation Database Save
             new_conv = models.Conversation(
@@ -251,12 +258,31 @@ async def handle_msg(request: Request):
                         order for order in orders_db
                         if order.get("customer_phone") == user_phone and order.get("status") == "In Progress"
                     ]
+
+                    # Agar kisi wajah se active order nahi mila, toh isi final summary se naya active order banao.
+                    # Is se button confirm par old confirmed receipt repeat nahi hogi.
                     if active_orders:
                         order = active_orders[-1]
-                        order["items_detected"] = parsed_items
-                        order["bill_amount"] = parsed_subtotal
-                        order["payment_method"] = parsed_payment
-                        order["delivery_address"] = parsed_address
+                    else:
+                        order = {
+                            "id": len(orders_db) + 1,
+                            "customer_phone": user_phone,
+                            "items_detected": "Pending Input...",
+                            "bill_amount": "0",
+                            "user_text": user_text,
+                            "ai_text": clean_reply,
+                            "status": "In Progress",
+                            "payment_method": "Cash On Delivery",
+                            "delivery_address": ""
+                        }
+                        orders_db.append(order)
+
+                    order["items_detected"] = parsed_items
+                    order["bill_amount"] = parsed_subtotal
+                    order["payment_method"] = parsed_payment
+                    order["delivery_address"] = parsed_address
+
+                    print("FINAL ORDER SAVED:", order)
 
                     send_whatsapp_buttons(user_phone, clean_reply)
             else:
@@ -323,6 +349,17 @@ def extract_order_details(summary_text):
     payment_method = "Cash On Delivery"
     delivery_address = ""
 
+    def add_item(item_name, item_price):
+        nonlocal subtotal
+        item_name = item_name.strip(" .,-")
+        item_price = int(item_price)
+        if not item_name:
+            return
+        formatted = f"{item_name:<22} Rs. {item_price}"
+        if formatted not in items:
+            items.append(formatted)
+            subtotal += item_price
+
     for raw_line in summary_text.splitlines():
         line = raw_line.strip()
         if not line:
@@ -343,25 +380,43 @@ def extract_order_details(summary_text):
             subtotal = int(total_match.group(2))
             continue
 
-        # Examples:
-        # 2x Chicken Burger - Rs. 400
-        # 2x Chicken Burger - 400
-        # 2 Chicken Burger - Rs 400
+        # Format: 2x Chicken Burger - Rs. 400 / 2 Chicken Burger - 400
         item_match = re.search(r'^(\d+\s*x?\s+.+?)\s*-\s*(?:rs\.?\s*)?(\d+)', line, re.IGNORECASE)
         if item_match:
-            item_name = item_match.group(1).strip()
-            item_price = int(item_match.group(2))
-            items.append(f"{item_name:<22} Rs. {item_price}")
-            subtotal += item_price
+            add_item(item_match.group(1), item_match.group(2))
             continue
 
-    # Agar item lines se subtotal nahi nikla, to text me numbers se final total nikalne ki backup try
+        # Sentence format:
+        # 2 Chicken Burgers ki price 400 rupees hai, 1 Cold Drink ki price 100 rupees hai
+        sentence_matches = re.findall(
+            r'(\d+\s*x?\s+[A-Za-z ]+?)\s+(?:ki|ka|ke)?\s*price\s*(?:rs\.?|is|hai|=)?\s*(\d+)',
+            line,
+            flags=re.IGNORECASE
+        )
+        for item_name, item_price in sentence_matches:
+            add_item(item_name, item_price)
+
+    # Backup: agar subtotal missing ho lekin item prices mil gayi hain to item sum use hoga.
+    if subtotal == 0 and items:
+        prices = re.findall(r'Rs\.\s*(\d+)', "\n".join(items))
+        subtotal = sum(int(p) for p in prices)
+
+    # Backup: agar item line nahi mili, total bill text se amount nikal lo.
     if subtotal == 0:
-        numbers = re.findall(r'(?:subtotal|total bill|total|bill|rs\.?)\s*(?:is|hai|:)?\s*(?:rs\.?\s*)?(\d+)', summary_text.lower())
+        numbers = re.findall(
+            r'(?:subtotal|total bill|total|bill)\s*(?:is|hai|:)?\s*(?:rs\.?\s*)?(\d+)',
+            summary_text.lower()
+        )
         if numbers:
             subtotal = max(int(n) for n in numbers)
 
     items_text = "\n".join(items) if items else "Order details pending"
+    print("PARSED RECEIPT DATA:", {
+        "items": items_text,
+        "subtotal": subtotal,
+        "payment": payment_method,
+        "address": delivery_address
+    })
     return items_text, str(subtotal), payment_method, delivery_address
 
 def generate_kababjees_receipt(order_id, customer_phone, items_text, amount, payment_method="Cash On Delivery", delivery_address=""):
@@ -370,9 +425,6 @@ def generate_kababjees_receipt(order_id, customer_phone, items_text, amount, pay
     current_date = datetime.datetime.now().strftime("%d/%m/%Y")
 
     bill_amt = int(amount) if str(amount).isdigit() else 0
-    gst = int(bill_amt * 0.13)
-    total = bill_amt + gst
-
     address_line = f"Address: {delivery_address}\n" if delivery_address else ""
 
     receipt_text = (
@@ -386,9 +438,7 @@ def generate_kababjees_receipt(order_id, customer_phone, items_text, amount, pay
         f"----------------------------\n"
         f"ITEMS:\n{items_text}\n"
         f"----------------------------\n"
-        f"SUBTOTAL:             Rs. {bill_amt}\n"
-        f"GST (13%):            Rs. {gst}\n"
-        f"TOTAL BILL:           Rs. {total}\n"
+        f"TOTAL BILL:           Rs. {bill_amt}\n"
         f"----------------------------\n"
         f"Payment: {payment_method}\n"
         f"Status: CONFIRMED ✓\n\n"
@@ -562,3 +612,4 @@ async def voice_endpoint():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
+    
