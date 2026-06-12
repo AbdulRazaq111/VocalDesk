@@ -144,12 +144,12 @@ async def handle_msg(request: Request):
 
                 send_text(user_phone, welcome_reply)
                 return {"status": "success"}
-            
             thanks_words = ["thanks", "thank you", "thankyou", "shukriya", "jazakallah", "ok", "okay"]
-
             if user_text.lower().strip() in thanks_words:
-               send_text(user_phone, "Aapka shukriya! Kababjees order confirm ho chuka hai.")
-               return {"status": "success"}
+                send_text(user_phone, "Aapka shukriya! Kababjees order confirm ho chuka hai.")
+                return {"status": "success"}
+            
+            
             
             
 
