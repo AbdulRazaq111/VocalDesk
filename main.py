@@ -123,6 +123,11 @@ async def handle_msg(request: Request):
             greetings = ["hi", "hello", "hey", "assalam o alaikum", "aoa", "start"]
             if user_text.lower() in greetings:
                 welcome_reply = "Asalam-o-Likum! Kababjees mein khush amdeed. Main apka order lene ke liye hazir hon. Aaj aap kya khana pasand karenge?"
+                thanks_words = ["thanks", "thank you", "thankyou", "shukriya", "jazakallah", "ok", "okay"]
+
+            if user_text.lower().strip() in thanks_words:
+                send_text(user_phone, "Aapka shukriya! Kababjees order confirm ho chuka hai.")
+                return {"status": "success"}
                 
                 # New Hi/start par fresh order session create hoga; purane active sessions archive ho jayenge
                 for order in orders_db:
