@@ -10,6 +10,7 @@ from groq import Groq
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles   # ✅ ADD 1: Static files ke liye
 
 print("STEP 1")
 load_dotenv()
@@ -31,6 +32,13 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
 client_eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
+
+# ✅ ADD 2: Apna Render URL .env mein daalein: BASE_URL=https://vocaldesk.onrender.com
+BASE_URL = os.getenv("BASE_URL", "https://your-server-url.onrender.com")
+
+# ✅ ADD 3: Static folder mount karo — Twilio yahan se audio files play karega
+os.makedirs("static", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -106,7 +114,7 @@ async def handle_msg(request: Request):
                         return {"status": "success"}
                             
 
-                    send_text(user_phone, "Maaf kijiyega, koi active order nahi mila. Fresh order ke liye \'Hi\' bhejein.")
+                    send_text(user_phone, "Maaf kijiyega, koi active order nahi mila. Fresh order ke liye 'Hi' bhejein.")
                     return {"status": "success"}
                 elif button_id == "no":
                     active_orders = [
@@ -148,8 +156,6 @@ async def handle_msg(request: Request):
             if user_text.lower().strip() in thanks_words:
                 send_text(user_phone, "Aapka shukriya! Kababjees order confirm ho chuka hai.")
                 return {"status": "success"}
-            
-            
             
             
 
@@ -456,8 +462,41 @@ def generate_kababjees_receipt(order_id, customer_phone, items_text, amount, pay
     return receipt_text
 
 
+# ✅ ADD 4: ElevenLabs se audio URL generate karo — Twilio ke liye
+def generate_voice_eleven_url(text: str, filename: str = "audio.mp3") -> str | None:
+    """
+    ElevenLabs se audio generate karke static/ folder mein save karta hai.
+    Twilio ko publicly accessible URL chahiye hoti hai audio play karne ke liye.
+    Return: full public URL string, ya None agar ElevenLabs fail ho jaye.
+    """
+    try:
+        os.makedirs("static", exist_ok=True)
+        file_path = f"static/{filename}"
+
+        voices_res = client_eleven.voices.get_all()
+        active_voice_id = voices_res.voices[0].voice_id
+
+        audio = client_eleven.text_to_speech.convert(
+            text=text,
+            voice_id=active_voice_id,
+            model_id="eleven_multilingual_v2",
+            output_format="mp3_44100_128",
+        )
+        with open(file_path, "wb") as f:
+            for chunk in audio:
+                f.write(chunk)
+
+        public_url = f"{BASE_URL}/static/{filename}"
+        print(f"ElevenLabs audio ready: {public_url}")
+        return public_url
+
+    except Exception as e:
+        print(f"ElevenLabs URL Error: {e}")
+        return None
+
 
 def generate_voice_eleven(text):
+    """WhatsApp voice note ke liye — local file path return karta hai"""
     file_path = "reply_audio.mp3"
     try:
         if os.path.exists(file_path):
@@ -566,54 +605,108 @@ def get_db_response(user_text):
         db.close()
 
 
+# ✅ FIX 5: Duplicate /voice routes hata diye — sirf ek sahi voice_callback raha
+# Twilio Console mein set karo: Voice Webhook = https://your-server.onrender.com/voice
 @app.post("/voice")
 async def voice_callback():
-    response = VoiceResponse()
-    response.say(
-        "Assalam-o-Alaikum! Kababjees VocalDesk mein khush amdeed. Main aapki kya madad kar sakta hoon?",
-        voice='polly.Aditi',
-        language='hi-IN'
-    )
+    """
+    Twilio yahan call karta hai jab incoming call aata hai.
+    ElevenLabs se natural awaaz mein greeting bajti hai,
+    phir customer ki awaaz suni jaati hai.
+    """
+    greeting_text = "Asalam-o-Alaikum! Kababjees mein khush amdeed. Main apka AI sales agent hoon. Aap kya order karna chahenge?"
 
-    gather = response.gather(input='speech', action='/handle-call', language='ur-PK', timeout=3)
-    return HTMLResponse(content=str(response), media_type="application/xml")
+    # ElevenLabs se natural Urdu/Roman-Urdu greeting generate karo
+    audio_url = generate_voice_eleven_url(greeting_text, filename="greeting.mp3")
+
+    response = VoiceResponse()
+
+    if audio_url:
+        response.play(audio_url)
+    else:
+        # Fallback: Twilio Polly voice agar ElevenLabs fail ho
+        response.say(greeting_text, voice='Polly.Aditi', language='hi-IN')
+
+    # Customer ki awaaz suno
+    gather = Gather(
+        input='speech',
+        action='/handle-call',
+        method='POST',
+        language='ur-PK',
+        speechTimeout='auto',
+        timeout=5
+    )
+    response.append(gather)
+
+    # Agar customer kuch na bole toh dobara greet karo
+    response.redirect('/voice')
+
+    return Response(content=str(response), media_type="application/xml")
 
 
 @app.post("/handle-call")
-async def handle_call(SpeechResult: str = Form(None)):
+async def handle_call(request: Request, SpeechResult: str = Form(None)):
+    """
+    Customer ki speech sunta hai → Groq AI se jawab leta hai →
+    ElevenLabs se natural awaaz mein play karta hai →
+    dobara sunta hai — yeh loop call khatam hone tak chalta rehta hai.
+    """
     response = VoiceResponse()
 
-    if SpeechResult:
-        print(f"Customer ne kaha: {SpeechResult}")
-        answer = get_db_response(SpeechResult)
+    if not SpeechResult or SpeechResult.strip() == "":
+        # Kuch samajh nahi aaya — dobara poochho
+        sorry_text = "Maaf kijiyega, mujhe aapki baat samajh nahi aayi. Zara dobara farmaiye?"
+        audio_url = generate_voice_eleven_url(sorry_text, filename="sorry.mp3")
 
-        response.say(answer, voice='polly.Aditi', language='hi-IN')
+        if audio_url:
+            response.play(audio_url)
+        else:
+            response.say(sorry_text, voice='Polly.Aditi', language='hi-IN')
 
-        response.gather(input='speech', action='/handle-call', language='ur-PK', timeout=3)
-    else:
-        response.say("Maaf kijiyega, mujhe aapki awaaz nahi aayi.")
+        gather = Gather(
+            input='speech',
+            action='/handle-call',
+            method='POST',
+            language='ur-PK',
+            speechTimeout='auto',
+            timeout=5
+        )
+        response.append(gather)
         response.redirect('/voice')
+        return Response(content=str(response), media_type="application/xml")
 
-    return HTMLResponse(content=str(response), media_type="application/xml")
+    print(f"Customer ne kaha (call): {SpeechResult}")
 
+    # AI se jawab lo — same Groq + DB pipeline
+    ai_reply = get_db_response(SpeechResult)
+    print(f"AI jawab (call): {ai_reply}")
 
-@app.post("/voice")
-async def voice_endpoint():
-    response = VoiceResponse()
+    # ElevenLabs se natural awaaz mein play karo
+    audio_url = generate_voice_eleven_url(ai_reply, filename="reply.mp3")
 
-    response.say(
-        "Assalam-o-alaikum Captain! VocalDesk mein khush amdeed. Main Kababjees ka AI assistant hoon.",
-        voice='Polly.Aditi',
-        language='hi-IN'
-    )
+    if audio_url:
+        response.play(audio_url)
+    else:
+        response.say(ai_reply, voice='Polly.Aditi', language='hi-IN')
 
-    gather = Gather(input='speech', action='/handle-response', speechTimeout='auto')
-    gather.say(
-        "Main aapki kya madad kar sakta hoon? Aap menu ya order status ke baare mein puch sakte hain.",
-        voice='Polly.Aditi',
-        language='hi-IN'
+    # ✅ CONVERSATION LOOP: AI jawab ke baad dobara customer ko suno
+    gather = Gather(
+        input='speech',
+        action='/handle-call',
+        method='POST',
+        language='ur-PK',
+        speechTimeout='auto',
+        timeout=5
     )
     response.append(gather)
+
+    # Agar customer 5 second mein kuch na bole toh call end karo
+    goodbye_text = "Shukria Kababjees choose karne ke liye! Khuda Hafiz."
+    goodbye_url = generate_voice_eleven_url(goodbye_text, filename="goodbye.mp3")
+    if goodbye_url:
+        response.play(goodbye_url)
+    else:
+        response.say(goodbye_text, voice='Polly.Aditi', language='hi-IN')
 
     return Response(content=str(response), media_type="application/xml")
 
@@ -621,4 +714,3 @@ async def voice_endpoint():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
-    
