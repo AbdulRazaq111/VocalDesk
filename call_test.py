@@ -1,22 +1,23 @@
 import requests
 import time
+import os
+from dotenv import load_dotenv
 
-# Aapka Data — values .env se ya yahan directly
-account_sid = "AC407e35ce82011cefc39a8b5dee63595f"   # Twilio Console se naya copy karo (purana leak ho gaya)
-auth_token = "f9e11da5007f409face938ca3efd940a"     # Twilio Console se naya regenerate karo
-to_number = "+923238292357"
-from_number = "+17622167199"
-render_url = "https://vocaldesk-backend.onrender.com/voice"  # ✅ Render URL (ngrok nahi)
+load_dotenv()
 
-# ✅ Step 1: Pehle Render server ko wake up karo (free tier cold start fix)
+account_sid = os.getenv("account_sid")
+auth_token = os.getenv("auth_token")
+to_number = os.getenv("to_number")
+from_number = os.getenv("from_number")
+render_url = "https://vocaldesk-backend.onrender.com/voice"
+
 print("Server wake up kar raha hai... (10 second wait)")
 try:
     requests.get("https://vocaldesk-backend.onrender.com", timeout=15)
 except:
     pass
-time.sleep(10)  # Server warm hone ka wait
+time.sleep(10)
 
-# ✅ Step 2: Call trigger karo
 url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Calls.json"
 
 payload = {
