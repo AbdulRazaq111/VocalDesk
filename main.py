@@ -10,7 +10,7 @@ from groq import Groq
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles   # ✅ ADD 1: Static files ke liye
+from fastapi.staticfiles import StaticFiles
 
 print("STEP 1")
 load_dotenv()
@@ -33,13 +33,15 @@ PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
 client_eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 
-# ✅ ADD 2: Apna Render URL .env mein daalein: BASE_URL=https://vocaldesk.onrender.com
-BASE_URL = os.getenv("BASE_URL", "https://your-server-url.onrender.com")
+BASE_URL = os.getenv("BASE_URL", "https://vocaldesk-backend.onrender.com")
 
-# ✅ ADD 3: Static folder mount karo — Twilio yahan se audio files play karega
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+
+# ==============================================================
+# FRONTEND
+# ==============================================================
 
 @app.get("/", response_class=HTMLResponse)
 async def read_frontend():
@@ -49,6 +51,10 @@ async def read_frontend():
             return f.read()
     return "VocalDesk Backend is Live! index.html was not found inside 'templates/' folder."
 
+
+# ==============================================================
+# WHATSAPP WEBHOOK
+# ==============================================================
 
 @app.get("/webhook")
 async def verify(request: Request):
@@ -69,11 +75,11 @@ async def get_all_orders():
 
 @app.post("/webhook")
 async def handle_msg(request: Request):
-    global orders_db  # <-- 4 spaces ke sath data ke bilkul upar
-    
+    global orders_db
+
     data = await request.json()
     db = next(get_db())
-    
+
     try:
         val = data['entry'][0]['changes'][0]['value']
         if 'messages' in val:
@@ -88,13 +94,12 @@ async def handle_msg(request: Request):
                 db.add(db_user)
                 db.commit()
                 db.refresh(db_user)
-            
+
             # 📥 BUTTON INTERACTIVE PARSING NODE
             if msg_obj.get('type') == 'interactive':
                 button_id = msg_obj['interactive']['button_reply']['id']
-                
+
                 if button_id == "yes":
-                    # Latest active order ko confirm karna hai, purane orders ko nahi
                     active_orders = [
                         order for order in orders_db
                         if order.get("customer_phone") == user_phone and order.get("status") == "In Progress"
@@ -112,10 +117,10 @@ async def handle_msg(request: Request):
                         )
                         send_text(user_phone, receipt)
                         return {"status": "success"}
-                            
 
                     send_text(user_phone, "Maaf kijiyega, koi active order nahi mila. Fresh order ke liye 'Hi' bhejein.")
                     return {"status": "success"}
+
                 elif button_id == "no":
                     active_orders = [
                         order for order in orders_db
@@ -123,17 +128,16 @@ async def handle_msg(request: Request):
                     ]
                     if active_orders:
                         active_orders[-1]["status"] = "Cancelled"
-                    send_text(user_phone, "Maaf kijiyega, aapka Kababjees order cancel kar diya gaya hai. Agar aap dobara order karna chahein toh 'Hi' likh kar start karein.")
+                    send_text(user_phone, "Maaf kijiyega, aapka order cancel kar diya gaya. Dobara order ke liye 'Hi' bhejein.")
                     return {"status": "success"}
 
             print(f"Naya message: {user_text} from {user_phone}")
 
+            # Greeting check
             greetings = ["hi", "hello", "hey", "assalam o alaikum", "aoa", "start"]
             if user_text.lower() in greetings:
                 welcome_reply = "Asalam-o-Likum! Kababjees mein khush amdeed. Main apka order lene ke liye hazir hon. Aaj aap kya khana pasand karenge?"
-                
-                
-                # New Hi/start par fresh order session create hoga; purane active sessions archive ho jayenge
+
                 for order in orders_db:
                     if order.get("customer_phone") == user_phone and order.get("status") == "In Progress":
                         order["status"] = "Archived"
@@ -152,17 +156,17 @@ async def handle_msg(request: Request):
 
                 send_text(user_phone, welcome_reply)
                 return {"status": "success"}
+
+            # Thanks check
             thanks_words = ["thanks", "thank you", "thankyou", "shukriya", "jazakallah", "ok", "okay"]
             if user_text.lower().strip() in thanks_words:
                 send_text(user_phone, "Aapka shukriya! Kababjees order confirm ho chuka hai.")
                 return {"status": "success"}
-            
-            
 
             # --- SMART KNOWLEDGE RETRIEVAL (Kababjees Menu) ---
             search_words = user_text.lower().split()
             all_info = db.query(models.BusinessKnowledge).all()
-            
+
             relevant_context = ""
             for item in all_info:
                 if any(word in item.answer.lower() or word in item.question.lower() for word in search_words):
@@ -175,8 +179,8 @@ async def handle_msg(request: Request):
             history = db.query(models.Conversation).filter(
                 models.Conversation.user_id == db_user.id
             ).order_by(models.Conversation.timestamp.desc()).limit(10).all()
-            
-            # --- THE STRICT SALESMAN LOGIC WITH EXPLICIT TRIGGER TAG ---
+
+            # --- STRICT SALESMAN SYSTEM PROMPT ---
             system_content = (
                 f"You are the official Kababjees Voice Sales Agent.\n"
                 f"STRICT INSTRUCTION: Use this Filtered Menu Data: {relevant_context}.\n\n"
@@ -184,8 +188,8 @@ async def handle_msg(request: Request):
                 f"1. Greet professionally: 'Asalam-o-Alaikum! Kababjees mein khush amdeed.'\n"
                 f"2. PRICE LOCK: Item prices sirf database/context se use karo. Fake ya hardcoded price mat do.\n"
                 f"3. Jab customer order items bataye, pehle items aur total confirm karo, phir address aur payment method mango.\n"
-                f"4. IMPORTANT: [ORDER_DONE] sirf tab lagana jab customer ka order, address aur payment method teeno confirm ho chuke hon. Agar address ya payment method missing ho toh [ORDER_DONE] bilkul mat lagana.\n"
-                f"5. Final order summary hamesha exactly is format mein do, item ko kabhi sentence mein merge mat karo:\n"
+                f"4. IMPORTANT: [ORDER_DONE] sirf tab lagana jab customer ka order, address aur payment method teeno confirm ho chuke hon.\n"
+                f"5. Final order summary hamesha exactly is format mein do:\n"
                 f"ORDER SUMMARY:\n"
                 f"2x Chicken Burger - Rs. 400\n"
                 f"1x Cold Drink - Rs. 100\n"
@@ -193,15 +197,14 @@ async def handle_msg(request: Request):
                 f"Address: customer address\n"
                 f"Payment: Cash On Delivery\n"
                 f"[ORDER_DONE]\n"
-                f"6. Har item alag line mein quantity + item name + price ke sath likho. Total sirf Subtotal line mein likho.\n"
+                f"6. Har item alag line mein quantity + item name + price ke sath likho.\n"
                 f"7. Short, Professional aur To-the-point baat karo."
             )
-            
+
             messages = [{"role": "system", "content": system_content}]
             for h in reversed(history):
                 messages.append({"role": "user", "content": h.user_message})
                 messages.append({"role": "assistant", "content": h.ai_response})
-            
             messages.append({"role": "user", "content": user_text})
 
             completion = client_groq.chat.completions.create(
@@ -214,15 +217,12 @@ async def handle_msg(request: Request):
 
             # Frontend Live State Sync
             bot_reply = ai_reply
-
-            # Sirf latest active order session update karna hai.
-            # Purane Confirmed/Archived order ko touch nahi karna, warna receipt old order se ban jati hai.
             active_sessions = [
                 order for order in orders_db
                 if order.get("customer_phone") == user_phone and order.get("status") == "In Progress"
             ]
             existing_session = active_sessions[-1] if active_sessions else None
-            
+
             if existing_session:
                 existing_session["user_text"] = existing_session.get("user_text", "") + f"\n\nCustomer: {user_text}"
                 existing_session["ai_text"] = existing_session.get("ai_text", "") + f"\n\nSana AI: {bot_reply}"
@@ -250,12 +250,11 @@ async def handle_msg(request: Request):
             db.add(new_conv)
             db.commit()
 
-            # --- 🎯 STABLE TAG IDENTIFICATION INTERACTIVE SWITCH ---
+            # --- ORDER DONE TAG HANDLER ---
             if "[order_done]" in ai_reply.lower():
                 clean_reply = ai_reply.replace("[ORDER_DONE]", "").replace("[order_done]", "").strip()
                 clean_reply_lower = clean_reply.lower()
 
-                # Safety: agar AI ne address/payment poochte hue galti se ORDER_DONE laga diya ho
                 asking_more_details = (
                     "address kya" in clean_reply_lower or
                     "payment method kya" in clean_reply_lower or
@@ -274,8 +273,6 @@ async def handle_msg(request: Request):
                         if order.get("customer_phone") == user_phone and order.get("status") == "In Progress"
                     ]
 
-                    # Agar kisi wajah se active order nahi mila, toh isi final summary se naya active order banao.
-                    # Is se button confirm par old confirmed receipt repeat nahi hogi.
                     if active_orders:
                         order = active_orders[-1]
                     else:
@@ -298,19 +295,21 @@ async def handle_msg(request: Request):
                     order["delivery_address"] = parsed_address
 
                     print("FINAL ORDER SAVED:", order)
-
                     send_whatsapp_buttons(user_phone, clean_reply)
             else:
                 send_text(user_phone, ai_reply)
 
-            
     except Exception as e:
         print(f"Error in handle_msg: {e}")
     finally:
         db.close()
-        
+
     return {"status": "ok"}
 
+
+# ==============================================================
+# WHATSAPP HELPER FUNCTIONS
+# ==============================================================
 
 def send_text(to, text):
     url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
@@ -321,13 +320,9 @@ def send_text(to, text):
 
 
 def send_whatsapp_buttons(to, text_body):
-    """Meta Interactive Protocol: String length locked under 20 chars limit"""
+    """Meta Interactive Buttons — title under 20 chars limit"""
     url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}", 
-        "Content-Type": "application/json"
-    }
-    
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -335,25 +330,35 @@ def send_whatsapp_buttons(to, text_body):
         "type": "interactive",
         "interactive": {
             "type": "button",
-            "body": {
-                "text": str(text_body)
-            },
+            "body": {"text": str(text_body)},
             "action": {
                 "buttons": [
-                    {
-                        "type": "reply", 
-                        "reply": {"id": "yes", "title": "Confirm Order"} # Under 20 chars limit
-                    },
-                    {
-                        "type": "reply", 
-                        "reply": {"id": "no", "title": "Cancel"} # Under 20 chars limit
-                    }
+                    {"type": "reply", "reply": {"id": "yes", "title": "Confirm Order"}},
+                    {"type": "reply", "reply": {"id": "no", "title": "Cancel"}}
                 ]
             }
         }
     }
     res = requests.post(url, headers=headers, json=payload)
-    print(f"Meta Trigger Status: {res.status_code} | Payload Response: {res.text}")
+    print(f"Meta Trigger Status: {res.status_code} | {res.text}")
+
+
+def send_audio(to, audio_path):
+    url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/media"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    files = {'file': (audio_path, open(audio_path, 'rb'), 'audio/mpeg'), 'messaging_product': (None, 'whatsapp')}
+    res = requests.post(url, headers=headers, files=files)
+    media_id = res.json().get('id')
+    if media_id:
+        send_url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
+        payload = {"messaging_product": "whatsapp", "to": to, "type": "audio", "audio": {"id": media_id}}
+        requests.post(send_url, headers=headers, json=payload)
+        print("Voice note bhej diya!")
+
+
+# ==============================================================
+# ORDER PARSING & RECEIPT
+# ==============================================================
 
 def extract_order_details(summary_text):
     """AI final summary se item-wise receipt data nikalne ke liye"""
@@ -395,28 +400,22 @@ def extract_order_details(summary_text):
             subtotal = int(total_match.group(2))
             continue
 
-        # Format: 2x Chicken Burger - Rs. 400 / 2 Chicken Burger - 400
         item_match = re.search(r'^(\d+\s*x?\s+.+?)\s*-\s*(?:rs\.?\s*)?(\d+)', line, re.IGNORECASE)
         if item_match:
             add_item(item_match.group(1), item_match.group(2))
             continue
 
-        # Sentence format:
-        # 2 Chicken Burgers ki price 400 rupees hai, 1 Cold Drink ki price 100 rupees hai
         sentence_matches = re.findall(
             r'(\d+\s*x?\s+[A-Za-z ]+?)\s+(?:ki|ka|ke)?\s*price\s*(?:rs\.?|is|hai|=)?\s*(\d+)',
-            line,
-            flags=re.IGNORECASE
+            line, flags=re.IGNORECASE
         )
         for item_name, item_price in sentence_matches:
             add_item(item_name, item_price)
 
-    # Backup: agar subtotal missing ho lekin item prices mil gayi hain to item sum use hoga.
     if subtotal == 0 and items:
         prices = re.findall(r'Rs\.\s*(\d+)', "\n".join(items))
         subtotal = sum(int(p) for p in prices)
 
-    # Backup: agar item line nahi mili, total bill text se amount nikal lo.
     if subtotal == 0:
         numbers = re.findall(
             r'(?:subtotal|total bill|total|bill)\s*(?:is|hai|:)?\s*(?:rs\.?\s*)?(\d+)',
@@ -426,23 +425,18 @@ def extract_order_details(summary_text):
             subtotal = max(int(n) for n in numbers)
 
     items_text = "\n".join(items) if items else "Order details pending"
-    print("PARSED RECEIPT DATA:", {
-        "items": items_text,
-        "subtotal": subtotal,
-        "payment": payment_method,
-        "address": delivery_address
-    })
+    print("PARSED RECEIPT DATA:", {"items": items_text, "subtotal": subtotal, "payment": payment_method, "address": delivery_address})
     return items_text, str(subtotal), payment_method, delivery_address
 
+
 def generate_kababjees_receipt(order_id, customer_phone, items_text, amount, payment_method="Cash On Delivery", delivery_address=""):
-    """Receipt ka standard layout text structure jo WhatsApp par land karega"""
+    """Receipt ka standard layout — WhatsApp par land karega"""
     import datetime
     current_date = datetime.datetime.now().strftime("%d/%m/%Y")
-
     bill_amt = int(amount) if str(amount).isdigit() else 0
     address_line = f"Address: {delivery_address}\n" if delivery_address else ""
 
-    receipt_text = (
+    return (
         f"============================\n"
         f"      KABABJEES AI AGENT\n"
         f"============================\n"
@@ -459,23 +453,22 @@ def generate_kababjees_receipt(order_id, customer_phone, items_text, amount, pay
         f"Status: CONFIRMED ✓\n\n"
         f"Thank you for choosing Kababjees!"
     )
-    return receipt_text
 
 
-# ✅ ADD 4: ElevenLabs se audio URL generate karo — Twilio ke liye
+# ==============================================================
+# ELEVENLABS VOICE FUNCTIONS
+# ==============================================================
+
 def generate_voice_eleven_url(text: str, filename: str = "audio.mp3") -> str | None:
     """
-    ElevenLabs se audio generate karke static/ folder mein save karta hai.
-    Twilio ko publicly accessible URL chahiye hoti hai audio play karne ke liye.
-    Return: full public URL string, ya None agar ElevenLabs fail ho jaye.
+    ElevenLabs se audio generate karke static/ mein save karta hai.
+    Twilio ke liye publicly accessible URL return karta hai.
     """
     try:
         os.makedirs("static", exist_ok=True)
         file_path = f"static/{filename}"
-
         voices_res = client_eleven.voices.get_all()
         active_voice_id = voices_res.voices[0].voice_id
-
         audio = client_eleven.text_to_speech.convert(
             text=text,
             voice_id=active_voice_id,
@@ -485,11 +478,9 @@ def generate_voice_eleven_url(text: str, filename: str = "audio.mp3") -> str | N
         with open(file_path, "wb") as f:
             for chunk in audio:
                 f.write(chunk)
-
         public_url = f"{BASE_URL}/static/{filename}"
         print(f"ElevenLabs audio ready: {public_url}")
         return public_url
-
     except Exception as e:
         print(f"ElevenLabs URL Error: {e}")
         return None
@@ -501,10 +492,8 @@ def generate_voice_eleven(text):
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
-
         voices_res = client_eleven.voices.get_all()
         active_voice_id = voices_res.voices[0].voice_id
-
         audio = client_eleven.text_to_speech.convert(
             text=text,
             voice_id=active_voice_id,
@@ -520,21 +509,12 @@ def generate_voice_eleven(text):
         return None
 
 
-def send_audio(to, audio_path):
-    url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/media"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-    files = {'file': (audio_path, open(audio_path, 'rb'), 'audio/mpeg'), 'messaging_product': (None, 'whatsapp')}
-    res = requests.post(url, headers=headers, files=files)
-    media_id = res.json().get('id')
-
-    if media_id:
-        send_url = f"https://graph.facebook.com/v18.0/{PHONE_ID}/messages"
-        payload = {"messaging_product": "whatsapp", "to": to, "type": "audio", "audio": {"id": media_id}}
-        requests.post(send_url, headers=headers, json=payload)
-        print("Voice note bhej diya!")
-
+# ==============================================================
+# TWILIO VOICE CALL ENDPOINTS
+# ==============================================================
 
 def get_db_response(user_text):
+    """Voice call ke liye AI response — same Groq + DB pipeline"""
     db = next(get_db())
     try:
         voice_user = db.query(models.User).filter(models.User.phone_number == "voice_call").first()
@@ -562,23 +542,19 @@ def get_db_response(user_text):
             f"You are the official Kababjees Voice Sales Agent. "
             f"STRICT INSTRUCTION: Use this Filtered Menu Data: {relevant_context}. "
             f"\n\nRULES IN ROMAN URDU:"
-            f"\n1. Greet professionally: 'Asalam-o-Alaikum! Kababjees mein khush amdeed. Main apka order lene ke liye hazir hon.'"
-            f"\n2. PRICE LOCK: Agar customer kisi item ka puche, toh context mein 'EXACT PRICES FOUND' wala hissa lazmi check karo. Agar price mil jaye toh batana zaroori hai."
-            f"\n3. NO REPETITION: Poora menu list mat karo. Sirf us item ki baat karo jo user ne puchi hai."
-            f"\n4. MATH LOGIC: Agar user quantity bataye (e.g. 2 pieces), toh total price calculate karke batao."
-            f"\n5. UPSELL: Main item ke baad pucho: 'Sir, iske sath Raita, Fries ya Cold drink add karni hai?'"
-            f"\n6. ORDER SUMMARY: Aakhir mein bill, Delivery address aur payment method confirm karo."
-            f"\n7. Speak like a professional waiter, short and polite."
-            f"\n7. Tum Kababjees ke salesman ho. Jawab hamesha 1-2 lines mein do."
-            f"\nAgar koi price puche toh sirf price aur item ka naam batao, lambay paragraphs mat likho."
-            f"\nShort, Professional aur To-the-point baat karo."
+            f"\n1. Greet professionally: 'Asalam-o-Alaikum! Kababjees mein khush amdeed.'"
+            f"\n2. PRICE LOCK: Sirf database se price batao."
+            f"\n3. NO REPETITION: Sirf us item ki baat karo jo user ne puchi hai."
+            f"\n4. MATH LOGIC: Quantity bataye toh total calculate karo."
+            f"\n5. UPSELL: 'Sir, iske sath Raita, Fries ya Cold drink add karni hai?'"
+            f"\n6. ORDER SUMMARY: Bill, address aur payment method confirm karo."
+            f"\n7. Jawab hamesha 1-2 lines mein do. Short aur professional."
         )
 
         messages = [{"role": "system", "content": system_content}]
         for h in reversed(history):
             messages.append({"role": "user", "content": h.user_message})
             messages.append({"role": "assistant", "content": h.ai_response})
-
         messages.append({"role": "user", "content": user_text})
 
         completion = client_groq.chat.completions.create(
@@ -605,27 +581,20 @@ def get_db_response(user_text):
         db.close()
 
 
-# ✅ FIX 5: Duplicate /voice routes hata diye — sirf ek sahi voice_callback raha
-# Twilio Console mein set karo: Voice Webhook = https://your-server.onrender.com/voice
 @app.post("/voice")
 async def voice_callback():
     """
-    Twilio yahan call karta hai jab incoming call aata hai.
-    ElevenLabs se natural awaaz mein greeting bajti hai,
-    phir customer ki awaaz suni jaati hai.
+    Twilio incoming call yahan aata hai.
+    ✅ FIX: ElevenLabs hata diya — Polly se instant greeting,
+    koi delay ya silence nahi.
+    Twilio Webhook: https://vocaldesk-backend.onrender.com/voice
     """
-    greeting_text = "Asalam-o-Alaikum! Kababjees mein khush amdeed. Main apka AI sales agent hoon. Aap kya order karna chahenge?"
-
-    # ElevenLabs se natural Urdu/Roman-Urdu greeting generate karo
-    audio_url = generate_voice_eleven_url(greeting_text, filename="greeting.mp3")
+    greeting_text = "Asalam o Alaikum! Kababjees mein khush amdeed. Main apka AI sales agent hoon. Aap kya order karna chahenge?"
 
     response = VoiceResponse()
 
-    if audio_url:
-        response.play(audio_url)
-    else:
-        # Fallback: Twilio Polly voice agar ElevenLabs fail ho
-        response.say(greeting_text, voice='Polly.Aditi', language='hi-IN')
+    # ✅ Polly se instant greeting — no ElevenLabs delay
+    response.say(greeting_text, voice='Polly.Aditi', language='hi-IN')
 
     # Customer ki awaaz suno
     gather = Gather(
@@ -647,22 +616,19 @@ async def voice_callback():
 @app.post("/handle-call")
 async def handle_call(request: Request, SpeechResult: str = Form(None)):
     """
-    Customer ki speech sunta hai → Groq AI se jawab leta hai →
-    ElevenLabs se natural awaaz mein play karta hai →
-    dobara sunta hai — yeh loop call khatam hone tak chalta rehta hai.
+    Customer ki speech → Groq AI jawab → Polly se play → dobara suno.
+    ✅ FIX: ElevenLabs hata diya — Polly reliable aur instant hai.
+    Conversation loop call khatam hone tak chalta rehta hai.
     """
     response = VoiceResponse()
 
     if not SpeechResult or SpeechResult.strip() == "":
         # Kuch samajh nahi aaya — dobara poochho
-        sorry_text = "Maaf kijiyega, mujhe aapki baat samajh nahi aayi. Zara dobara farmaiye?"
-        audio_url = generate_voice_eleven_url(sorry_text, filename="sorry.mp3")
-
-        if audio_url:
-            response.play(audio_url)
-        else:
-            response.say(sorry_text, voice='Polly.Aditi', language='hi-IN')
-
+        response.say(
+            "Maaf kijiyega, mujhe aapki baat samajh nahi aayi. Zara dobara farmaiye?",
+            voice='Polly.Aditi',
+            language='hi-IN'
+        )
         gather = Gather(
             input='speech',
             action='/handle-call',
@@ -677,19 +643,14 @@ async def handle_call(request: Request, SpeechResult: str = Form(None)):
 
     print(f"Customer ne kaha (call): {SpeechResult}")
 
-    # AI se jawab lo — same Groq + DB pipeline
+    # AI se jawab lo
     ai_reply = get_db_response(SpeechResult)
     print(f"AI jawab (call): {ai_reply}")
 
-    # ElevenLabs se natural awaaz mein play karo
-    audio_url = generate_voice_eleven_url(ai_reply, filename="reply.mp3")
+    # ✅ Polly se AI ka jawab play karo — instant, no delay
+    response.say(ai_reply, voice='Polly.Aditi', language='hi-IN')
 
-    if audio_url:
-        response.play(audio_url)
-    else:
-        response.say(ai_reply, voice='Polly.Aditi', language='hi-IN')
-
-    # ✅ CONVERSATION LOOP: AI jawab ke baad dobara customer ko suno
+    # Conversation loop — dobara customer ko suno
     gather = Gather(
         input='speech',
         action='/handle-call',
@@ -700,16 +661,19 @@ async def handle_call(request: Request, SpeechResult: str = Form(None)):
     )
     response.append(gather)
 
-    # Agar customer 5 second mein kuch na bole toh call end karo
-    goodbye_text = "Shukria Kababjees choose karne ke liye! Khuda Hafiz."
-    goodbye_url = generate_voice_eleven_url(goodbye_text, filename="goodbye.mp3")
-    if goodbye_url:
-        response.play(goodbye_url)
-    else:
-        response.say(goodbye_text, voice='Polly.Aditi', language='hi-IN')
+    # Agar customer 5 second mein kuch na bole toh goodbye
+    response.say(
+        "Shukria Kababjees choose karne ke liye! Khuda Hafiz.",
+        voice='Polly.Aditi',
+        language='hi-IN'
+    )
 
     return Response(content=str(response), media_type="application/xml")
 
+
+# ==============================================================
+# SERVER START
+# ==============================================================
 
 if __name__ == "__main__":
     import uvicorn
