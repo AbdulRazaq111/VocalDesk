@@ -2,12 +2,13 @@ import requests
 
 # Aapka Data
 account_sid = "AC407e35ce82011cefc39a8b5dee63595f"
-auth_token = "f9e11da5007f409face938ca3efd940a"
+auth_token = "2a77f3a81b52a29bd9e07b4ee7faf9bf"
 to_number = "+923238292357"
 from_number = "+17622167199"
 ngrok_url = "https://unperused-cristi-superstylishly.ngrok-free.dev/voice"
 
 url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Calls.json"
+
 
 payload = {
     "To": to_number,
