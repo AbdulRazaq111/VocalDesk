@@ -610,61 +610,38 @@ async def voice_callback():
 
 @app.post("/handle-call")
 async def handle_call(request: Request, SpeechResult: str = Form(None)):
-    """
-    Customer ki speech → Groq AI jawab → ElevenLabs se play → dobara suno.
-    Fallback: Polly agar ElevenLabs fail ho.
-    Conversation loop call khatam hone tak chalta rehta hai.
-    """
     response = VoiceResponse()
 
     if not SpeechResult or SpeechResult.strip() == "":
-        # Kuch samajh nahi aaya — dobara poochho
-        sorry_text = "Maaf kijiyega, mujhe aapki baat samajh nahi aayi. Zara dobara farmaiye?"
+        sorry_text = "Maaf kijiyega, dobara farmaiye?"
         audio_url = generate_voice_eleven_url(sorry_text, filename="sorry.mp3")
-
         if audio_url:
             response.play(audio_url)
         else:
             response.say(sorry_text, voice='Polly.Aditi', language='hi-IN')
-
-        gather = Gather(
-            input='speech',
-            action='/handle-call',
-            method='POST',
-            language='ur-PK',
-            speechTimeout='auto',
-            timeout=5
-        )
+        gather = Gather(input='speech', action='/handle-call', method='POST', language='ur-PK', speechTimeout='auto', timeout=5)
         response.append(gather)
         response.redirect('/voice')
         return Response(content=str(response), media_type="application/xml")
 
     print(f"Customer ne kaha (call): {SpeechResult}")
 
-    # AI se jawab lo
+    # ✅ Step 1: Pehle Polly se instant "soch raha hoon" message
+    response.say("Ji zaroor...", voice='Polly.Aditi', language='hi-IN')
+
+    # ✅ Step 2: AI jawab + ElevenLabs audio
     ai_reply = get_db_response(SpeechResult)
     print(f"AI jawab (call): {ai_reply}")
 
-    # ElevenLabs se natural awaaz mein play karo
     audio_url = generate_voice_eleven_url(ai_reply, filename="reply.mp3")
-
     if audio_url:
         response.play(audio_url)
     else:
         response.say(ai_reply, voice='Polly.Aditi', language='hi-IN')
 
-    # Conversation loop — dobara customer ko suno
-    gather = Gather(
-        input='speech',
-        action='/handle-call',
-        method='POST',
-        language='ur-PK',
-        speechTimeout='auto',
-        timeout=5
-    )
+    gather = Gather(input='speech', action='/handle-call', method='POST', language='ur-PK', speechTimeout='auto', timeout=5)
     response.append(gather)
 
-    # Agar customer 5 second mein kuch na bole toh goodbye
     goodbye_text = "Shukria Kababjees choose karne ke liye! Khuda Hafiz."
     goodbye_url = generate_voice_eleven_url(goodbye_text, filename="goodbye.mp3")
     if goodbye_url:
