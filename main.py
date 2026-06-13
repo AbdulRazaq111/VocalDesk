@@ -583,20 +583,17 @@ def get_db_response(user_text):
 
 @app.post("/voice")
 async def voice_callback():
-    """
-    Twilio incoming call yahan aata hai.
-    ✅ FIX: ElevenLabs hata diya — Polly se instant greeting,
-    koi delay ya silence nahi.
-    Twilio Webhook: https://vocaldesk-backend.onrender.com/voice
-    """
-    greeting_text = "Asalam o Alaikum! Kababjees mein khush amdeed. Main apka AI sales agent hoon. Aap kya order karna chahenge?"
+    greeting_text = "Asalam-o-Alaikum! Kababjees mein khush amdeed. Main apka AI sales agent hoon. Aap kya order karna chahenge?"
+
+    audio_url = generate_voice_eleven_url(greeting_text, filename="greeting.mp3")
 
     response = VoiceResponse()
 
-    # ✅ Polly se instant greeting — no ElevenLabs delay
-    response.say(greeting_text, voice='Polly.Aditi', language='hi-IN')
+    if audio_url:
+        response.play(audio_url)
+    else:
+        response.say(greeting_text, voice='Polly.Aditi', language='hi-IN')
 
-    # Customer ki awaaz suno
     gather = Gather(
         input='speech',
         action='/handle-call',
@@ -606,8 +603,6 @@ async def voice_callback():
         timeout=5
     )
     response.append(gather)
-
-    # Agar customer kuch na bole toh dobara greet karo
     response.redirect('/voice')
 
     return Response(content=str(response), media_type="application/xml")
@@ -616,19 +611,22 @@ async def voice_callback():
 @app.post("/handle-call")
 async def handle_call(request: Request, SpeechResult: str = Form(None)):
     """
-    Customer ki speech → Groq AI jawab → Polly se play → dobara suno.
-    ✅ FIX: ElevenLabs hata diya — Polly reliable aur instant hai.
+    Customer ki speech → Groq AI jawab → ElevenLabs se play → dobara suno.
+    Fallback: Polly agar ElevenLabs fail ho.
     Conversation loop call khatam hone tak chalta rehta hai.
     """
     response = VoiceResponse()
 
     if not SpeechResult or SpeechResult.strip() == "":
         # Kuch samajh nahi aaya — dobara poochho
-        response.say(
-            "Maaf kijiyega, mujhe aapki baat samajh nahi aayi. Zara dobara farmaiye?",
-            voice='Polly.Aditi',
-            language='hi-IN'
-        )
+        sorry_text = "Maaf kijiyega, mujhe aapki baat samajh nahi aayi. Zara dobara farmaiye?"
+        audio_url = generate_voice_eleven_url(sorry_text, filename="sorry.mp3")
+
+        if audio_url:
+            response.play(audio_url)
+        else:
+            response.say(sorry_text, voice='Polly.Aditi', language='hi-IN')
+
         gather = Gather(
             input='speech',
             action='/handle-call',
@@ -647,8 +645,13 @@ async def handle_call(request: Request, SpeechResult: str = Form(None)):
     ai_reply = get_db_response(SpeechResult)
     print(f"AI jawab (call): {ai_reply}")
 
-    # ✅ Polly se AI ka jawab play karo — instant, no delay
-    response.say(ai_reply, voice='Polly.Aditi', language='hi-IN')
+    # ElevenLabs se natural awaaz mein play karo
+    audio_url = generate_voice_eleven_url(ai_reply, filename="reply.mp3")
+
+    if audio_url:
+        response.play(audio_url)
+    else:
+        response.say(ai_reply, voice='Polly.Aditi', language='hi-IN')
 
     # Conversation loop — dobara customer ko suno
     gather = Gather(
@@ -662,11 +665,12 @@ async def handle_call(request: Request, SpeechResult: str = Form(None)):
     response.append(gather)
 
     # Agar customer 5 second mein kuch na bole toh goodbye
-    response.say(
-        "Shukria Kababjees choose karne ke liye! Khuda Hafiz.",
-        voice='Polly.Aditi',
-        language='hi-IN'
-    )
+    goodbye_text = "Shukria Kababjees choose karne ke liye! Khuda Hafiz."
+    goodbye_url = generate_voice_eleven_url(goodbye_text, filename="goodbye.mp3")
+    if goodbye_url:
+        response.play(goodbye_url)
+    else:
+        response.say(goodbye_text, voice='Polly.Aditi', language='hi-IN')
 
     return Response(content=str(response), media_type="application/xml")
 
