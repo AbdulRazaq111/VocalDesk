@@ -1,19 +1,29 @@
 import requests
+import time
+from dotenv import load_dotenv
+import os
 
-# Aapka Data
-account_sid = "AC407e35ce82011cefc39a8b5dee63595f"
-auth_token = "2a77f3a81b52a29bd9e07b4ee7faf9bf"
-to_number = "+923238292357"
-from_number = "+17622167199"
-ngrok_url = "https://unperused-cristi-superstylishly.ngrok-free.dev/voice"
+load_dotenv()
+
+account_sid = os.getenv("account_sid")
+auth_token = os.getenv("auth_token")
+to_number = os.getenv("to_number")
+from_number = os.getenv("from_number")
+render_url = "https://vocaldesk-backend.onrender.com/voice"
+
+print("Server wake up kar raha hai... (10 second wait)")
+try:
+    requests.get("https://vocaldesk-backend.onrender.com", timeout=15)
+except:
+    pass
+time.sleep(10)
 
 url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Calls.json"
-
 
 payload = {
     "To": to_number,
     "From": from_number,
-    "Url": ngrok_url
+    "Url": render_url
 }
 
 print("Call trigger ho rahi hai...")
