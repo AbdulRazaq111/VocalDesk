@@ -95,7 +95,7 @@ async def handle_msg(request: Request):
                 db.commit()
                 db.refresh(db_user)
 
-            # 📥 BUTTON INTERACTIVE PARSING NODE
+            # BUTTON INTERACTIVE PARSING NODE
             if msg_obj.get('type') == 'interactive':
                 button_id = msg_obj['interactive']['button_reply']['id']
 
@@ -150,6 +150,7 @@ async def handle_msg(request: Request):
                     "user_text": user_text,
                     "ai_text": welcome_reply,
                     "status": "In Progress",
+                    "channel": "WhatsApp",
                     "payment_method": "Cash On Delivery",
                     "delivery_address": ""
                 })
@@ -163,7 +164,7 @@ async def handle_msg(request: Request):
                 send_text(user_phone, "Aapka shukriya! Kababjees order confirm ho chuka hai.")
                 return {"status": "success"}
 
-            # --- SMART KNOWLEDGE RETRIEVAL (Kababjees Menu) ---
+            # SMART KNOWLEDGE RETRIEVAL
             search_words = user_text.lower().split()
             all_info = db.query(models.BusinessKnowledge).all()
 
@@ -175,12 +176,12 @@ async def handle_msg(request: Request):
             if not relevant_context:
                 relevant_context = "Kababjees Menu includes Fried Chicken, Burgers, Sandwiches, and Exclusive Deals."
 
-            # Memory Context (Pichli 10 baatein)
+            # Memory Context
             history = db.query(models.Conversation).filter(
                 models.Conversation.user_id == db_user.id
             ).order_by(models.Conversation.timestamp.desc()).limit(10).all()
 
-            # --- STRICT SALESMAN SYSTEM PROMPT ---
+            # STRICT SALESMAN SYSTEM PROMPT
             system_content = (
                 f"You are the official Kababjees Voice Sales Agent.\n"
                 f"STRICT INSTRUCTION: Use this Filtered Menu Data: {relevant_context}.\n\n"
@@ -235,6 +236,7 @@ async def handle_msg(request: Request):
                     "user_text": user_text,
                     "ai_text": bot_reply,
                     "status": "In Progress",
+                    "channel": "WhatsApp",
                     "payment_method": "Cash On Delivery",
                     "delivery_address": ""
                 }
@@ -250,7 +252,7 @@ async def handle_msg(request: Request):
             db.add(new_conv)
             db.commit()
 
-            # --- ORDER DONE TAG HANDLER ---
+            # ORDER DONE TAG HANDLER
             if "[order_done]" in ai_reply.lower():
                 clean_reply = ai_reply.replace("[ORDER_DONE]", "").replace("[order_done]", "").strip()
                 clean_reply_lower = clean_reply.lower()
@@ -284,6 +286,7 @@ async def handle_msg(request: Request):
                             "user_text": user_text,
                             "ai_text": clean_reply,
                             "status": "In Progress",
+                            "channel": "WhatsApp",
                             "payment_method": "Cash On Delivery",
                             "delivery_address": ""
                         }
@@ -513,13 +516,17 @@ def generate_voice_eleven(text):
 # TWILIO VOICE CALL ENDPOINTS
 # ==============================================================
 
-def get_db_response(user_text):
-    """Voice call ke liye AI response — same Groq + DB pipeline"""
+def get_db_response(user_text, call_sid="voice_call"):
+    """
+    Voice call ke liye AI response — same Groq + DB pipeline.
+    ✅ call_sid se alag alag calls track hoti hain frontend pe.
+    """
+    global orders_db
     db = next(get_db())
     try:
-        voice_user = db.query(models.User).filter(models.User.phone_number == "voice_call").first()
+        voice_user = db.query(models.User).filter(models.User.phone_number == call_sid).first()
         if not voice_user:
-            voice_user = models.User(phone_number="voice_call")
+            voice_user = models.User(phone_number=call_sid)
             db.add(voice_user)
             db.commit()
             db.refresh(voice_user)
@@ -564,6 +571,15 @@ def get_db_response(user_text):
         )
         ai_reply = completion.choices[0].message.content
 
+        # ✅ Call session frontend pe update karo
+        call_session = next(
+            (o for o in orders_db if o.get("customer_phone") == call_sid and o.get("status") == "In Progress"),
+            None
+        )
+        if call_session:
+            call_session["user_text"] = call_session.get("user_text", "") + f"\n\nCustomer: {user_text}"
+            call_session["ai_text"] = call_session.get("ai_text", "") + f"\n\nAI: {ai_reply}"
+
         new_conv = models.Conversation(
             user_id=voice_user.id,
             message_type="voice",
@@ -582,13 +598,39 @@ def get_db_response(user_text):
 
 
 @app.post("/voice")
-async def voice_callback():
-    greeting_text = "Asalam-o-Alaikum! Kababjees mein khush amdeed. Main apka AI sales agent hoon. Aap kya order karna chahenge?"
+async def voice_callback(request: Request):
+    """
+    Twilio incoming call yahan aata hai.
+    ✅ Call session frontend orders_db mein create hota hai.
+    Twilio Webhook: https://vocaldesk-backend.onrender.com/voice
+    """
+    global orders_db
 
+    form_data = await request.form()
+    call_sid = form_data.get("CallSid", "voice_call")
+    caller_number = form_data.get("From", "Unknown")
+
+    # ✅ Frontend pe call session create karo
+    existing = next((o for o in orders_db if o.get("customer_phone") == call_sid), None)
+    if not existing:
+        orders_db.append({
+            "id": len(orders_db) + 1,
+            "customer_phone": caller_number,
+            "call_sid": call_sid,
+            "items_detected": "Call In Progress...",
+            "bill_amount": "0",
+            "user_text": "",
+            "ai_text": "",
+            "status": "In Progress",
+            "channel": "Voice Call",
+            "payment_method": "Cash On Delivery",
+            "delivery_address": ""
+        })
+
+    greeting_text = "Asalam-o-Alaikum! Kababjees mein khush amdeed. Main apka AI sales agent hoon. Aap kya order karna chahenge?"
     audio_url = generate_voice_eleven_url(greeting_text, filename="greeting.mp3")
 
     response = VoiceResponse()
-
     if audio_url:
         response.play(audio_url)
     else:
@@ -596,7 +638,7 @@ async def voice_callback():
 
     gather = Gather(
         input='speech',
-        action='/handle-call',
+        action=f'/handle-call?call_sid={call_sid}',
         method='POST',
         language='ur-PK',
         speechTimeout='auto',
@@ -610,6 +652,17 @@ async def voice_callback():
 
 @app.post("/handle-call")
 async def handle_call(request: Request, SpeechResult: str = Form(None)):
+    """
+    Customer ki speech → Groq AI jawab → ElevenLabs se play → dobara suno.
+    ✅ Har turn frontend orders_db mein update hota hai.
+    Fallback: Polly agar ElevenLabs fail ho.
+    """
+    global orders_db
+
+    form_data = await request.form()
+    call_sid = request.query_params.get("call_sid") or form_data.get("CallSid", "voice_call")
+    caller_number = form_data.get("From", "Unknown")
+
     response = VoiceResponse()
 
     if not SpeechResult or SpeechResult.strip() == "":
@@ -619,29 +672,46 @@ async def handle_call(request: Request, SpeechResult: str = Form(None)):
             response.play(audio_url)
         else:
             response.say(sorry_text, voice='Polly.Aditi', language='hi-IN')
-        gather = Gather(input='speech', action='/handle-call', method='POST', language='ur-PK', speechTimeout='auto', timeout=5)
+        gather = Gather(
+            input='speech',
+            action=f'/handle-call?call_sid={call_sid}',
+            method='POST',
+            language='ur-PK',
+            speechTimeout='auto',
+            timeout=5
+        )
         response.append(gather)
         response.redirect('/voice')
         return Response(content=str(response), media_type="application/xml")
 
     print(f"Customer ne kaha (call): {SpeechResult}")
 
-    # ✅ Step 1: Pehle Polly se instant "soch raha hoon" message
+    # Instant filler — silence khatam
     response.say("Ji zaroor...", voice='Polly.Aditi', language='hi-IN')
 
-    # ✅ Step 2: AI jawab + ElevenLabs audio
-    ai_reply = get_db_response(SpeechResult)
+    # AI jawab lo — call_sid se track karo
+    ai_reply = get_db_response(SpeechResult, call_sid=call_sid)
     print(f"AI jawab (call): {ai_reply}")
 
+    # ElevenLabs se natural awaaz
     audio_url = generate_voice_eleven_url(ai_reply, filename="reply.mp3")
     if audio_url:
         response.play(audio_url)
     else:
         response.say(ai_reply, voice='Polly.Aditi', language='hi-IN')
 
-    gather = Gather(input='speech', action='/handle-call', method='POST', language='ur-PK', speechTimeout='auto', timeout=5)
+    # Conversation loop
+    gather = Gather(
+        input='speech',
+        action=f'/handle-call?call_sid={call_sid}',
+        method='POST',
+        language='ur-PK',
+        speechTimeout='auto',
+        timeout=5
+    )
     response.append(gather)
 
+    # Goodbye agar customer kuch na bole
     goodbye_text = "Shukria Kababjees choose karne ke liye! Khuda Hafiz."
     goodbye_url = generate_voice_eleven_url(goodbye_text, filename="goodbye.mp3")
     if goodbye_url:
