@@ -95,6 +95,29 @@ async def get_all_orders():
     return orders_db
 
 
+@app.get("/api/analytics/calls")
+async def get_call_analytics():
+    """Frontend analytics ke liye voice call summary.
+    Is route ke bina dashboard /api/analytics/calls par 404 show kar raha tha.
+    """
+    voice_calls = [o for o in orders_db if o.get("channel") == "Voice Call"]
+
+    def safe_amount(value):
+        try:
+            return int(str(value).replace("Rs.", "").replace(",", "").strip())
+        except Exception:
+            return 0
+
+    return {
+        "total_calls": len(voice_calls),
+        "active_calls": len([o for o in voice_calls if o.get("status") == "In Progress"]),
+        "confirmed_calls": len([o for o in voice_calls if o.get("status") == "Confirmed"]),
+        "cancelled_calls": len([o for o in voice_calls if o.get("status") == "Cancelled"]),
+        "voice_revenue": sum(safe_amount(o.get("bill_amount", 0)) for o in voice_calls if o.get("status") == "Confirmed"),
+        "calls": voice_calls[-20:]
+    }
+
+
 @app.post("/webhook")
 async def handle_msg(request: Request):
     global orders_db
@@ -586,8 +609,16 @@ def get_db_response(user_text, call_sid="voice_call"):
             f"\n3. ITEM NAME LOCK: Customer ne jo exact item bola wahi repeat karo. Apni taraf se item name change ya rename mat karo."
             f"\n4. MATH LOCK: Total = quantity x unit price. Calculate karo aur confirm karo."
             f"\n5. UPSELL: 'Sir, iske sath kuch aur add karni hai?'"
-            f"\n6. ORDER SUMMARY: Bill, address aur payment method confirm karo."
-            f"\n7. Jawab hamesha 1-2 lines mein do. Short aur professional."
+            f"\n6. Jab tak items, total bill, delivery address aur payment method complete na hon, order confirm mat bolo."
+            f"\n7. Jab customer final yes/confirm kare aur items + bill + address + payment complete hon, final summary exactly is format mein do:"
+            f"\nORDER SUMMARY:"
+            f"\n2x Chicken Burger - Rs. 400"
+            f"\nSubtotal: Rs. 400"
+            f"\nAddress: customer address"
+            f"\nPayment: Cash On Delivery"
+            f"\n[ORDER_DONE]"
+            f"\n8. [ORDER_DONE] sirf final confirmation ke time lagana. Is tag ke baghair backend order confirmed nahi karega."
+            f"\n9. Normal jawab hamesha 1-2 lines mein do. Short aur professional."
         )
 
         messages = [{"role": "system", "content": system_content}]
@@ -627,6 +658,96 @@ def get_db_response(user_text, call_sid="voice_call"):
         return "Maaf kijiyega, mujhe abhi jawab nahi mil raha."
     finally:
         db.close()
+
+
+def finalize_voice_order_if_done(call_sid, ai_reply, user_text=""):
+    """
+    Voice call mein WhatsApp button nahi hota.
+    Isliye jab AI final summary ke sath [ORDER_DONE] bhejta hai,
+    backend us call session ko Confirmed mark karta hai taake frontend par show ho.
+    """
+    global orders_db
+
+    clean_reply = ai_reply.replace("[ORDER_DONE]", "").replace("[order_done]", "").strip()
+    ai_lower = ai_reply.lower()
+    clean_lower = clean_reply.lower()
+
+    has_order_done_tag = "[order_done]" in ai_lower
+
+    asking_more_details = (
+        "address kya" in clean_lower or
+        "payment method kya" in clean_lower or
+        "address aur payment" in clean_lower or
+        "address bhej" in clean_lower or
+        "payment method bat" in clean_lower or
+        "payment method confirm" in clean_lower
+    )
+
+    # Fallback: agar AI natural language mein confirmed bol de lekin tag miss kar de
+    confirmed_phrases = [
+        "order confirm",
+        "order confirmed",
+        "confirm ho gaya",
+        "confirm ho chuka",
+        "order ho gaya",
+        "apka order confirm",
+        "aapka order confirm",
+    ]
+    user_confirm_words = ["yes", "han", "haan", "confirm", "ok", "okay", "theek", "done", "thanks", "thank you", "shukriya"]
+
+    natural_confirm = (
+        any(p in clean_lower for p in confirmed_phrases)
+        and any(w in user_text.lower() for w in user_confirm_words)
+        and not asking_more_details
+    )
+
+    if not has_order_done_tag and not natural_confirm:
+        return ai_reply, False
+
+    if asking_more_details:
+        return clean_reply, False
+
+    # Existing call session find karo
+    order = next(
+        (o for o in orders_db if o.get("call_sid") == call_sid and o.get("status") == "In Progress"),
+        None
+    )
+    if not order:
+        order = next((o for o in orders_db if o.get("call_sid") == call_sid), None)
+
+    if not order:
+        order = {
+            "id": len(orders_db) + 1,
+            "customer_phone": "Voice Caller",
+            "call_sid": call_sid,
+            "items_detected": "Order details pending",
+            "bill_amount": "0",
+            "user_text": user_text,
+            "ai_text": clean_reply,
+            "status": "In Progress",
+            "channel": "Voice Call",
+            "payment_method": "Cash On Delivery",
+            "delivery_address": ""
+        }
+        orders_db.append(order)
+
+    parsed_items, parsed_subtotal, parsed_payment, parsed_address = extract_order_details(clean_reply)
+
+    # Agar parsing empty ho, existing data preserve karo
+    if parsed_items != "Order details pending":
+        order["items_detected"] = parsed_items
+    if parsed_subtotal and str(parsed_subtotal) != "0":
+        order["bill_amount"] = parsed_subtotal
+    if parsed_payment:
+        order["payment_method"] = parsed_payment
+    if parsed_address:
+        order["delivery_address"] = parsed_address
+
+    order["status"] = "Confirmed"
+    order["ai_text"] = order.get("ai_text", "") + f"\n\nAI: {clean_reply}"
+
+    print("VOICE ORDER CONFIRMED:", order)
+    return clean_reply, True
 
 
 @app.api_route("/voice", methods=["GET", "POST"])
@@ -720,7 +841,12 @@ async def handle_call(request: Request, SpeechResult: str = Form(None)):
 
     # AI jawab lo
     ai_reply = get_db_response(SpeechResult, call_sid=call_sid)
+
+    # Agar voice call mein order final ho gaya ho to frontend ke liye status Confirmed karo
+    ai_reply, voice_order_confirmed = finalize_voice_order_if_done(call_sid, ai_reply, SpeechResult)
     print(f"AI jawab (call): {ai_reply}")
+    if voice_order_confirmed:
+        print("✅ Voice call order frontend par Confirmed show hoga.")
 
     # Twilio Polly direct awaaz — ElevenLabs audio generation/play removed for faster live call response
     response.say(
