@@ -625,7 +625,7 @@ def get_db_response(user_text, call_sid="voice_call"):
         db.close()
 
 
-@app.post("/voice")
+@app.api_route("/voice", methods=["GET", "POST"])
 async def voice_callback(request: Request):
     """
     Twilio incoming call yahan aata hai.
@@ -660,11 +660,7 @@ async def voice_callback(request: Request):
     greeting_url = f"{BASE_URL}/static/greeting.mp3"
 
     response = VoiceResponse()
-    response.say(
-        "Kababjees mein khush amdeed. Aap kya order karna chahenge?",
-        voice='Polly.Kajal',
-        language='hi-IN'
-    )
+    response.play(greeting_url)
 
     gather = Gather(
         input='speech',
@@ -720,8 +716,12 @@ async def handle_call(request: Request, SpeechResult: str = Form(None)):
     ai_reply = get_db_response(SpeechResult, call_sid=call_sid)
     print(f"AI jawab (call): {ai_reply}")
 
-    # Twilio Polly voice reply
-    response.say(ai_reply, voice='Polly.Kajal', language='hi-IN')
+    # ElevenLabs se natural awaaz — turbo model, clear voice
+    audio_url = generate_voice_eleven_url(ai_reply, filename="reply.mp3")
+    if audio_url:
+        response.play(audio_url)
+    else:
+        response.say(ai_reply, voice='Polly.Aditi', language='hi-IN')
 
     # Conversation loop — dobara suno
     gather = Gather(
