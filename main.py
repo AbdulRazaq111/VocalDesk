@@ -40,6 +40,24 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # ==============================================================
+# STARTUP — Greeting audio pre-generate (delay fix)
+# ==============================================================
+
+@app.on_event("startup")
+async def pre_generate_greeting():
+    """
+    Server start hote hi greeting audio generate kar lo.
+    Pehli call pe delay nahi aayegi.
+    """
+    try:
+        greeting_text = "Kababjees mein khush amdeed. Aap kya order karna chahenge?"
+        generate_voice_eleven_url(greeting_text, filename="greeting.mp3")
+        print("✅ Greeting audio pre-generated successfully.")
+    except Exception as e:
+        print(f"Greeting pre-generate error: {e}")
+
+
+# ==============================================================
 # FRONTEND
 # ==============================================================
 
@@ -87,7 +105,7 @@ async def handle_msg(request: Request):
             user_phone = msg_obj['from']
             user_text = msg_obj.get('text', {}).get('body', "")
 
-            # 1. User check ya create karna (PostgreSQL)
+            # User check ya create karna
             db_user = db.query(models.User).filter(models.User.phone_number == user_phone).first()
             if not db_user:
                 db_user = models.User(phone_number=user_phone)
@@ -95,7 +113,7 @@ async def handle_msg(request: Request):
                 db.commit()
                 db.refresh(db_user)
 
-            # BUTTON INTERACTIVE PARSING NODE
+            # BUTTON INTERACTIVE PARSING
             if msg_obj.get('type') == 'interactive':
                 button_id = msg_obj['interactive']['button_reply']['id']
 
@@ -176,21 +194,21 @@ async def handle_msg(request: Request):
             if not relevant_context:
                 relevant_context = "Kababjees Menu includes Fried Chicken, Burgers, Sandwiches, and Exclusive Deals."
 
-            # Memory Context
             history = db.query(models.Conversation).filter(
                 models.Conversation.user_id == db_user.id
             ).order_by(models.Conversation.timestamp.desc()).limit(10).all()
 
-            # STRICT SALESMAN SYSTEM PROMPT
             system_content = (
                 f"You are the official Kababjees Voice Sales Agent.\n"
                 f"STRICT INSTRUCTION: Use this Filtered Menu Data: {relevant_context}.\n\n"
                 f"RULES IN ROMAN URDU:\n"
                 f"1. Greet professionally: 'Asalam-o-Alaikum! Kababjees mein khush amdeed.'\n"
                 f"2. PRICE LOCK: Item prices sirf database/context se use karo. Fake ya hardcoded price mat do.\n"
-                f"3. Jab customer order items bataye, pehle items aur total confirm karo, phir address aur payment method mango.\n"
-                f"4. IMPORTANT: [ORDER_DONE] sirf tab lagana jab customer ka order, address aur payment method teeno confirm ho chuke hon.\n"
-                f"5. Final order summary hamesha exactly is format mein do:\n"
+                f"3. ITEM NAME LOCK: Customer ne jo exact item name bola hai, wahi use karo. Apni taraf se item name change mat karo.\n"
+                f"4. MATH LOCK: Quantity x price = total. Yeh calculation khud karo aur dobara check karo.\n"
+                f"5. Jab customer order items bataye, pehle items aur total confirm karo, phir address aur payment method mango.\n"
+                f"6. IMPORTANT: [ORDER_DONE] sirf tab lagana jab customer ka order, address aur payment method teeno confirm ho chuke hon.\n"
+                f"7. Final order summary hamesha exactly is format mein do:\n"
                 f"ORDER SUMMARY:\n"
                 f"2x Chicken Burger - Rs. 400\n"
                 f"1x Cold Drink - Rs. 100\n"
@@ -198,8 +216,8 @@ async def handle_msg(request: Request):
                 f"Address: customer address\n"
                 f"Payment: Cash On Delivery\n"
                 f"[ORDER_DONE]\n"
-                f"6. Har item alag line mein quantity + item name + price ke sath likho.\n"
-                f"7. Short, Professional aur To-the-point baat karo."
+                f"8. Har item alag line mein quantity + item name + price ke sath likho.\n"
+                f"9. Short, Professional aur To-the-point baat karo."
             )
 
             messages = [{"role": "system", "content": system_content}]
@@ -216,7 +234,6 @@ async def handle_msg(request: Request):
             ai_reply = completion.choices[0].message.content
             print(f"AI Response: {ai_reply}")
 
-            # Frontend Live State Sync
             bot_reply = ai_reply
             active_sessions = [
                 order for order in orders_db
@@ -242,7 +259,6 @@ async def handle_msg(request: Request):
                 }
                 orders_db.append(existing_session)
 
-            # Conversation Database Save
             new_conv = models.Conversation(
                 user_id=db_user.id,
                 message_type="text",
@@ -466,21 +482,29 @@ def generate_voice_eleven_url(text: str, filename: str = "audio.mp3") -> str | N
     """
     ElevenLabs se audio generate karke static/ mein save karta hai.
     Twilio ke liye publicly accessible URL return karta hai.
+    ✅ eleven_turbo_v2_5 model use — fastest + clear voice, no background noise.
     """
     try:
         os.makedirs("static", exist_ok=True)
         file_path = f"static/{filename}"
+
+        # ✅ Agar greeting already exist kare toh dobara generate mat karo (delay fix)
+        if filename == "greeting.mp3" and os.path.exists(file_path):
+            return f"{BASE_URL}/static/{filename}"
+
         voices_res = client_eleven.voices.get_all()
         active_voice_id = voices_res.voices[0].voice_id
+
         audio = client_eleven.text_to_speech.convert(
             text=text,
             voice_id=active_voice_id,
-            model_id="eleven_multilingual_v2",
+            model_id="eleven_turbo_v2_5",   # ✅ Fastest model — low latency, clear voice
             output_format="mp3_44100_128",
         )
         with open(file_path, "wb") as f:
             for chunk in audio:
                 f.write(chunk)
+
         public_url = f"{BASE_URL}/static/{filename}"
         print(f"ElevenLabs audio ready: {public_url}")
         return public_url
@@ -500,7 +524,7 @@ def generate_voice_eleven(text):
         audio = client_eleven.text_to_speech.convert(
             text=text,
             voice_id=active_voice_id,
-            model_id="eleven_multilingual_v2",
+            model_id="eleven_turbo_v2_5",
             output_format="mp3_44100_128",
         )
         with open(file_path, "wb") as f:
@@ -519,7 +543,8 @@ def generate_voice_eleven(text):
 def get_db_response(user_text, call_sid="voice_call"):
     """
     Voice call ke liye AI response — same Groq + DB pipeline.
-    ✅ call_sid se alag alag calls track hoti hain frontend pe.
+    ✅ Greeting repeat nahi hogi — history check se skip hogi.
+    ✅ Item name aur price calculation strict rules ke saath.
     """
     global orders_db
     db = next(get_db())
@@ -545,15 +570,18 @@ def get_db_response(user_text, call_sid="voice_call"):
             models.Conversation.user_id == voice_user.id
         ).order_by(models.Conversation.timestamp.desc()).limit(10).all()
 
+        # ✅ Agar history hai toh greeting dobara mat karo
+        is_first_message = len(history) == 0
+
         system_content = (
             f"You are the official Kababjees Voice Sales Agent. "
             f"STRICT INSTRUCTION: Use this Filtered Menu Data: {relevant_context}. "
-            f"\n\nRULES IN ROMAN URDU:"
-            f"\n1. Greet professionally: 'Asalam-o-Alaikum! Kababjees mein khush amdeed.'"
-            f"\n2. PRICE LOCK: Sirf database se price batao."
-            f"\n3. NO REPETITION: Sirf us item ki baat karo jo user ne puchi hai."
-            f"\n4. MATH LOGIC: Quantity bataye toh total calculate karo."
-            f"\n5. UPSELL: 'Sir, iske sath Raita, Fries ya Cold drink add karni hai?'"
+            f"\n\nRULES:"
+            f"\n1. {'Greet once: Kababjees mein khush amdeed.' if is_first_message else 'DO NOT greet again. Customer already greeted. Go straight to helping.'}"
+            f"\n2. PRICE LOCK: Sirf database se exact price batao. Koi estimated ya rounded price mat do."
+            f"\n3. ITEM NAME LOCK: Customer ne jo exact item bola wahi repeat karo. Apni taraf se item name change ya rename mat karo."
+            f"\n4. MATH LOCK: Total = quantity x unit price. Calculate karo aur confirm karo."
+            f"\n5. UPSELL: 'Sir, iske sath kuch aur add karni hai?'"
             f"\n6. ORDER SUMMARY: Bill, address aur payment method confirm karo."
             f"\n7. Jawab hamesha 1-2 lines mein do. Short aur professional."
         )
@@ -567,13 +595,13 @@ def get_db_response(user_text, call_sid="voice_call"):
         completion = client_groq.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=messages,
-            temperature=0.2
+            temperature=0.1   # ✅ Lower temperature — accurate calculations
         )
         ai_reply = completion.choices[0].message.content
 
-        # ✅ Call session frontend pe update karo
+        # Frontend call session update
         call_session = next(
-            (o for o in orders_db if o.get("customer_phone") == call_sid and o.get("status") == "In Progress"),
+            (o for o in orders_db if o.get("call_sid") == call_sid and o.get("status") == "In Progress"),
             None
         )
         if call_session:
@@ -601,6 +629,7 @@ def get_db_response(user_text, call_sid="voice_call"):
 async def voice_callback(request: Request):
     """
     Twilio incoming call yahan aata hai.
+    ✅ Pre-generated greeting play hoti hai — no delay.
     ✅ Call session frontend orders_db mein create hota hai.
     Twilio Webhook: https://vocaldesk-backend.onrender.com/voice
     """
@@ -610,8 +639,8 @@ async def voice_callback(request: Request):
     call_sid = form_data.get("CallSid", "voice_call")
     caller_number = form_data.get("From", "Unknown")
 
-    # ✅ Frontend pe call session create karo
-    existing = next((o for o in orders_db if o.get("customer_phone") == call_sid), None)
+    # Frontend pe call session create karo
+    existing = next((o for o in orders_db if o.get("call_sid") == call_sid), None)
     if not existing:
         orders_db.append({
             "id": len(orders_db) + 1,
@@ -627,14 +656,11 @@ async def voice_callback(request: Request):
             "delivery_address": ""
         })
 
-    greeting_text = "Asalam-o-Alaikum! Kababjees mein khush amdeed. Main apka AI sales agent hoon. Aap kya order karna chahenge?"
-    audio_url = generate_voice_eleven_url(greeting_text, filename="greeting.mp3")
+    # ✅ Pre-generated greeting use karo — instant play, no delay
+    greeting_url = f"{BASE_URL}/static/greeting.mp3"
 
     response = VoiceResponse()
-    if audio_url:
-        response.play(audio_url)
-    else:
-        response.say(greeting_text, voice='Polly.Aditi', language='hi-IN')
+    response.play(greeting_url)
 
     gather = Gather(
         input='speech',
@@ -654,14 +680,14 @@ async def voice_callback(request: Request):
 async def handle_call(request: Request, SpeechResult: str = Form(None)):
     """
     Customer ki speech → Groq AI jawab → ElevenLabs se play → dobara suno.
+    ✅ Greeting repeat nahi hogi.
+    ✅ Background noise khatam — turbo model use.
     ✅ Har turn frontend orders_db mein update hota hai.
-    Fallback: Polly agar ElevenLabs fail ho.
     """
     global orders_db
 
     form_data = await request.form()
     call_sid = request.query_params.get("call_sid") or form_data.get("CallSid", "voice_call")
-    caller_number = form_data.get("From", "Unknown")
 
     response = VoiceResponse()
 
@@ -686,21 +712,18 @@ async def handle_call(request: Request, SpeechResult: str = Form(None)):
 
     print(f"Customer ne kaha (call): {SpeechResult}")
 
-    # Instant filler — silence khatam
-    response.say("Ji zaroor...", voice='Polly.Aditi', language='hi-IN')
-
-    # AI jawab lo — call_sid se track karo
+    # AI jawab lo
     ai_reply = get_db_response(SpeechResult, call_sid=call_sid)
     print(f"AI jawab (call): {ai_reply}")
 
-    # ElevenLabs se natural awaaz
+    # ElevenLabs se natural awaaz — turbo model, clear voice
     audio_url = generate_voice_eleven_url(ai_reply, filename="reply.mp3")
     if audio_url:
         response.play(audio_url)
     else:
         response.say(ai_reply, voice='Polly.Aditi', language='hi-IN')
 
-    # Conversation loop
+    # Conversation loop — dobara suno
     gather = Gather(
         input='speech',
         action=f'/handle-call?call_sid={call_sid}',
