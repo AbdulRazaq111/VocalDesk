@@ -149,6 +149,335 @@
   .call-ic-drop { background: #FCEBEB; color: var(--red); }
   .call-num { font-size: 13px; font-weight: 500; color: var(--text); }
   .call-dur { font-size: 11px; color: var(--text2); margin-top: 2px; }
+
+/* ==========================================================
+   MOBILE RESPONSIVE FIXES — VocalDesk Dashboard
+   Added for mobile/tablet view only. Desktop design unchanged.
+   ========================================================== */
+
+@media (max-width: 1100px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .grid-3 {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .grid-chat {
+    grid-template-columns: 220px 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  html, body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .layout {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+
+  .sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 12px;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+
+  .sb-brand {
+    margin-bottom: 12px;
+    justify-content: center;
+  }
+
+  .sb-logo {
+    width: 34px;
+    height: 34px;
+  }
+
+  .sb-name {
+    font-size: 15px;
+  }
+
+  .sb-sub {
+    font-size: 10px;
+  }
+
+  .sb-section {
+    display: none;
+  }
+
+  .sb-nav {
+    flex-direction: row;
+    gap: 8px;
+    overflow-x: auto;
+    margin-bottom: 8px;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .sb-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .sn {
+    width: auto;
+    min-width: max-content;
+    padding: 8px 10px;
+    font-size: 12px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .sn i {
+    font-size: 16px;
+  }
+
+  .sb-divider {
+    display: none;
+  }
+
+  .sb-status {
+    margin-top: 6px;
+    padding: 8px 10px;
+    text-align: center;
+  }
+
+  .sb-status-sub {
+    display: none;
+  }
+
+  .main {
+    width: 100%;
+    overflow: visible;
+  }
+
+  .topbar {
+    padding: 12px;
+    align-items: flex-start;
+    gap: 10px;
+    flex-direction: column;
+  }
+
+  .topbar-title {
+    font-size: 16px;
+  }
+
+  .topbar-right {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .topbar-right::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tb-badge {
+    font-size: 11px;
+    padding: 6px 9px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .content {
+    padding: 12px;
+    overflow-x: hidden;
+  }
+
+  .stats-grid,
+  .grid-2,
+  .grid-3,
+  .grid-chat {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .stat-card,
+  .card,
+  .card-full {
+    border-radius: 12px;
+    padding: 14px;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .stat-value {
+    font-size: 24px;
+  }
+
+  .card-hd {
+    font-size: 13px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .item-row {
+    gap: 8px;
+  }
+
+  .item-bar-wrap {
+    width: 55px;
+    margin: 0 6px;
+  }
+
+  .conv-list {
+    max-height: 260px;
+  }
+
+  .ci {
+    padding: 10px 8px;
+  }
+
+  .ci-meta {
+    display: none;
+  }
+
+  .chat-view {
+    min-height: 430px;
+  }
+
+  .chat-header {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .chat-messages {
+    max-height: 300px;
+  }
+
+  .msg {
+    max-width: 92%;
+    font-size: 12px;
+    padding: 8px 11px;
+  }
+
+  .chat-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .call-row {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .call-l {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .call-num,
+  .call-dur {
+    word-break: break-word;
+  }
+
+  .call-row > .chip {
+    flex-shrink: 0;
+  }
+
+  #tab-orders .card-full {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #tab-orders table {
+    min-width: 720px;
+  }
+
+  #tab-orders .card-hd {
+    position: sticky;
+    left: 0;
+    background: var(--surface);
+    z-index: 2;
+  }
+
+  canvas {
+    max-width: 100% !important;
+  }
+
+  #hourlyC,
+  #weekC,
+  #revC,
+  #timeC {
+    min-height: 170px;
+  }
+}
+
+@media (max-width: 420px) {
+  .sidebar {
+    padding: 10px;
+  }
+
+  .sb-brand {
+    justify-content: flex-start;
+  }
+
+  .sn {
+    font-size: 11px;
+    padding: 7px 9px;
+  }
+
+  .content {
+    padding: 10px;
+  }
+
+  .stat-card,
+  .card,
+  .card-full {
+    padding: 12px;
+  }
+
+  .stat-label {
+    font-size: 10px;
+  }
+
+  .stat-value {
+    font-size: 22px;
+  }
+
+  .chip {
+    font-size: 9px;
+    padding: 3px 7px;
+  }
+
+  .av {
+    width: 28px;
+    height: 28px;
+    font-size: 10px;
+  }
+
+  .chat-header {
+    flex-direction: column;
+  }
+
+  .chat-header .chip {
+    align-self: flex-start;
+  }
+
+  .call-ic {
+    width: 28px;
+    height: 28px;
+    font-size: 13px;
+  }
+
+  .topbar-right {
+    flex-wrap: nowrap;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -438,7 +767,8 @@ function updateDashboardCounters(data) {
     let displayLogs = totalOrdersCount > 0 ? totalOrdersCount : 29;
     
     document.getElementById('sv-wp').textContent = displayWP;
-    document.getElementById('wp-live').textContent = `${displayWP} chats · ${document.getElementById('sv-calls').textContent} calls`;
+    document.getElementById('wp-live').textContent = displayWP;
+    document.getElementById('calls-live').textContent = document.getElementById('sv-calls').textContent;
     document.getElementById('chat-count-badge').textContent = displayWP;
     document.getElementById('order-count-badge').textContent = `${displayLogs} orders active`;
     
