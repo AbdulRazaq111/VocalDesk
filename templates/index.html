@@ -677,7 +677,7 @@
       <!-- ── ORDERS ── -->
       <div class="tab-page" id="tab-orders">
         <div class="card-full">
-          <div class="card-hd">Live Orders Database — From PostgreSQL Memory <span class="chip chip-purple" id="order-count-badge">0 orders active</span></div>
+          <div class="card-hd">Live Orders Dashboard — WhatsApp + Voice Calls <span class="chip chip-purple" id="order-count-badge">0 orders active</span></div>
           <table style="width:100%;border-collapse:collapse;font-size:13px">
             <thead><tr style="border-bottom:1px solid #e8e6f0"><th style="text-align:left;padding:8px 0;color:#6b6880;font-weight:500">Session ID</th><th style="text-align:left;padding:8px 0;color:#6b6880;font-weight:500">Customer Phone</th><th style="text-align:left;padding:8px 0;color:#6b6880;font-weight:500">Detected Intent</th><th style="text-align:right;padding:8px 0;color:#6b6880;font-weight:500">Bill Amount</th><th style="text-align:right;padding:8px 0;color:#6b6880;font-weight:500">Session Status</th></tr></thead>
             <tbody id="orderTableBody"></tbody>
@@ -724,6 +724,7 @@ async function fetchLiveOrdersFromServer() {
         updateDashboardCounters(data);
         renderOrdersTable(data);
         fetchVoiceAnalyticsPipeline();
+        updateLiveDashboardSections(data);
     } catch (error) {
         console.error("Live sync failure on server fetch:", error);
     }
@@ -871,7 +872,7 @@ function renderOrdersTable(data) {
             <td style="padding:10px 0;color:#1a1825;font-weight:500">${order.customer_phone}</td>
             <td style="padding:10px 0;color:#6b6880">${order.items_detected || 'Processing Text Input...'}</td>
             <td style="padding:10px 0;text-align:right;font-weight:600;color:#534AB7">Rs. ${order.bill_amount}</td>
-            <td style="padding:10px 0;text-align:right"><span class="chip chip-amber">${order.status || 'In Progress'}</span></td>
+            <td style="padding:10px 0;text-align:right"><span class="chip ${(order.status || '').toLowerCase() === 'confirmed' ? 'chip-green' : ((order.status || '').toLowerCase() === 'cancelled' ? 'chip-red' : 'chip-amber')}">${order.status || 'In Progress'}</span></td>
         </tr>`;
     });
     tbody.innerHTML = rowsHTML;
@@ -970,6 +971,168 @@ async function fetchVoiceAnalyticsPipeline() {
             }
         }
     } catch (e) { }
+}
+
+
+// ==========================================
+// LIVE + DEMO DASHBOARD SECTIONS
+// Static demo rows remain visible, live call/order rows are added on top.
+// ==========================================
+function escapeHTML(value) {
+    return String(value ?? '').replace(/[&<>"']/g, function(ch) {
+        return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch]);
+    });
+}
+
+function findCardByTitle(tabSelector, titleText) {
+    const cards = Array.from(document.querySelectorAll(`${tabSelector} .card`));
+    return cards.find(card => {
+        const hd = card.querySelector('.card-hd');
+        return hd && hd.textContent.toLowerCase().includes(titleText.toLowerCase());
+    });
+}
+
+function isVoiceOrder(order) {
+    return (order.channel || '').toLowerCase().includes('voice') || (order.call_sid || '').length > 0;
+}
+
+function shortOrderText(order) {
+    const text = `${order.items_detected || ''} ${order.user_text || ''} ${order.ai_text || ''}`.replace(/\s+/g, ' ').trim();
+    if (!text || text.toLowerCase().includes('call in progress')) return 'Customer interaction running';
+    return text.length > 72 ? text.slice(0, 72) + '...' : text;
+}
+
+function voiceStatusChip(status) {
+    const s = (status || 'In Progress').toLowerCase();
+    if (s === 'confirmed') return '<span class="chip chip-green">Converted</span>';
+    if (s === 'cancelled' || s === 'dropped') return '<span class="chip chip-red">Dropped</span>';
+    return '<span class="chip chip-green">Live</span>';
+}
+
+function voiceIconClass(status) {
+    const s = (status || 'In Progress').toLowerCase();
+    if (s === 'confirmed') return 'call-ic-done';
+    if (s === 'cancelled' || s === 'dropped') return 'call-ic-drop';
+    return 'call-ic-live';
+}
+
+function voiceIcon(status) {
+    const s = (status || 'In Progress').toLowerCase();
+    if (s === 'confirmed') return 'ti ti-phone-check';
+    if (s === 'cancelled' || s === 'dropped') return 'ti ti-phone-x';
+    return 'ti ti-phone';
+}
+
+function renderVoiceRow(order, mode='live') {
+    const amount = parseInt(order.bill_amount) || 0;
+    const status = order.status || 'In Progress';
+    const detail = mode === 'recent'
+        ? (amount > 0 ? `Rs.${amount} order` : shortOrderText(order))
+        : shortOrderText(order);
+
+    return `
+      <div class="call-row">
+        <div class="call-l">
+          <div class="call-ic ${voiceIconClass(status)}"><i class="${voiceIcon(status)}"></i></div>
+          <div>
+            <div class="call-num">${escapeHTML(order.customer_phone || order.call_sid || 'Voice Caller')}</div>
+            <div class="call-dur">${mode === 'recent' ? 'Live record' : 'Now'} — ${escapeHTML(detail)}</div>
+          </div>
+        </div>
+        ${voiceStatusChip(status)}
+      </div>`;
+}
+
+function updateLiveAndRecentCallCards(data) {
+    const liveCard = findCardByTitle('#tab-calls', 'Live calls');
+    const recentCard = findCardByTitle('#tab-calls', 'Recent call log');
+    if (!liveCard || !recentCard) return;
+
+    const voiceOrders = data.filter(isVoiceOrder);
+    const liveVoice = voiceOrders.filter(order => (order.status || '').toLowerCase() === 'in progress').slice(-5).reverse();
+    const recentVoice = voiceOrders.filter(order => (order.status || '').toLowerCase() !== 'in progress').slice(-6).reverse();
+
+    const demoLiveRows = `
+      <div class="call-row"><div class="call-l"><div class="call-ic call-ic-live"><i class="ti ti-phone"></i></div><div><div class="call-num">+92 300 123 4567</div><div class="call-dur">02:14 — Ordering fried chicken</div></div></div><span class="chip chip-green">Live</span></div>
+      <div class="call-row"><div class="call-l"><div class="call-ic call-ic-live"><i class="ti ti-phone"></i></div><div><div class="call-num">+92 321 555 6789</div><div class="call-dur">01:08 — Asking about deals</div></div></div><span class="chip chip-green">Live</span></div>
+      <div class="call-row"><div class="call-l"><div class="call-ic call-ic-live"><i class="ti ti-phone"></i></div><div><div class="call-num">+92 333 999 1111</div><div class="call-dur">00:33 — Greeting stage</div></div></div><span class="chip chip-green">Live</span></div>`;
+
+    const demoRecentRows = `
+      <div class="call-row"><div class="call-l"><div class="call-ic call-ic-done"><i class="ti ti-phone-check"></i></div><div><div class="call-num">+92 345 111 2222</div><div class="call-dur">4m 12s · Rs.700 order</div></div></div><span class="chip chip-green">Converted</span></div>
+      <div class="call-row"><div class="call-l"><div class="call-ic call-ic-done"><i class="ti ti-phone-check"></i></div><div><div class="call-num">+92 311 444 5566</div><div class="call-dur">2m 44s · Burger deal</div></div></div><span class="chip chip-green">Converted</span></div>
+      <div class="call-row"><div class="call-l"><div class="call-ic call-ic-drop"><i class="ti ti-phone-x"></i></div><div><div class="call-num">+92 300 777 8899</div><div class="call-dur">0m 04s · Dropped early</div></div></div><span class="chip chip-red">Dropped</span></div>
+      <div class="call-row"><div class="call-l"><div class="call-ic call-ic-done"><i class="ti ti-phone-check"></i></div><div><div class="call-num">+92 321 000 1234</div><div class="call-dur">5m 30s · Rs.1,400</div></div></div><span class="chip chip-green">Converted</span></div>`;
+
+    liveCard.innerHTML = `<div class="card-hd">Live calls <span class="chip chip-green">${liveVoice.length || 3} active</span></div>` +
+        liveVoice.map(order => renderVoiceRow(order, 'live')).join('') + demoLiveRows;
+
+    recentCard.innerHTML = `<div class="card-hd">Recent call log <span class="chip chip-blue">Demo + Live</span></div>` +
+        recentVoice.map(order => renderVoiceRow(order, 'recent')).join('') + demoRecentRows;
+}
+
+function updateLiveTopOrderedItems(data) {
+    // Demo counts stay as base; live WhatsApp + Voice data adds on top
+    let itemsMap = {"Fried Chicken": 18, "Burger Deal": 12, "BBQ Platter": 9, "Sandwich": 6, "Cold Drink": 4};
+    const itemAliases = {
+        "Fried Chicken": ["fried chicken", "broast", "broasted", "chicken"],
+        "Burger Deal": ["burger", "zinger", "deal"],
+        "BBQ Platter": ["bbq", "platter", "tikka", "boti"],
+        "Sandwich": ["sandwich"],
+        "Cold Drink": ["cold drink", "drink", "coke", "pepsi", "sprite", "7up"]
+    };
+
+    data.forEach(order => {
+        const searchable = `${order.items_detected || ''} ${order.user_text || ''} ${order.ai_text || ''}`.toLowerCase();
+        Object.keys(itemAliases).forEach(item => {
+            if (itemAliases[item].some(alias => searchable.includes(alias))) itemsMap[item] += 1;
+        });
+    });
+
+    renderTopOrderedItemsUI(itemsMap);
+}
+
+function updateLivePerformanceSummary(data) {
+    if (!data || data.length === 0) return;
+
+    const total = data.length;
+    const voiceOrders = data.filter(isVoiceOrder);
+    const wpOrders = data.filter(order => !isVoiceOrder(order));
+    const confirmedAll = data.filter(order => (order.status || '').toLowerCase() === 'confirmed');
+    const confirmedVoice = voiceOrders.filter(order => (order.status || '').toLowerCase() === 'confirmed');
+    const confirmedWP = wpOrders.filter(order => (order.status || '').toLowerCase() === 'confirmed');
+
+    const responseRate = 100;
+    const callCompletion = voiceOrders.length ? Math.round((confirmedVoice.length / voiceOrders.length) * 100) : 78;
+    const wpConversion = wpOrders.length ? Math.round((confirmedWP.length / wpOrders.length) * 100) : 62;
+    const overall = Math.round((confirmedAll.length / total) * 100) || 88;
+
+    const rows = document.querySelectorAll('#tab-analytics .prog-row');
+    const values = [responseRate, callCompletion, wpConversion, 44, overall];
+    rows.forEach((row, idx) => {
+        if (values[idx] !== undefined) {
+            const strong = row.querySelector('strong');
+            const fill = row.querySelector('.prog-fill');
+            if (strong) strong.textContent = `${values[idx]}%`;
+            if (fill) fill.style.width = `${values[idx]}%`;
+        }
+    });
+}
+
+function updateLiveDashboardSections(data) {
+    updateLiveAndRecentCallCards(data);
+    updateLiveTopOrderedItems(data);
+    updateLivePerformanceSummary(data);
+
+    const voiceOrders = data.filter(isVoiceOrder);
+    const liveVoice = voiceOrders.filter(order => (order.status || '').toLowerCase() === 'in progress');
+
+    if (voiceOrders.length > 0) {
+        document.getElementById('sv-calls').textContent = voiceOrders.length;
+        document.getElementById('calls-live').textContent = voiceOrders.length;
+        document.getElementById('calls-completed-val').textContent = voiceOrders.filter(order => (order.status || '').toLowerCase() === 'confirmed').length || voiceOrders.length;
+        const twilioStatus = document.getElementById('lbl-twilio-status');
+        if (twilioStatus) twilioStatus.textContent = `${liveVoice.length || 0} live now`;
+    }
 }
 
 setInterval(fetchLiveOrdersFromServer, 3500);
