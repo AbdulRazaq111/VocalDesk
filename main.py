@@ -35,26 +35,30 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 
 BASE_URL = os.getenv("BASE_URL", "https://vocaldesk-backend.onrender.com")
 
+# Twilio direct TTS settings — faster than ElevenLabs audio generation for live calls
+TWILIO_TTS_VOICE = "Polly.Kajal-Neural"
+TWILIO_TTS_LANGUAGE = "hi-IN"
+
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # ==============================================================
-# STARTUP — Greeting audio pre-generate (delay fix)
+# STARTUP — Twilio Polly direct voice mode
 # ==============================================================
 
 @app.on_event("startup")
 async def pre_generate_greeting():
     """
-    Server start hote hi greeting audio generate kar lo.
-    Pehli call pe delay nahi aayegi.
+    Live calls ab ElevenLabs audio file par depend nahi karte.
+    Twilio Polly Neural voice direct response.say() se bolti hai,
+    isliye greeting pre-generate karne ki zaroorat nahi.
+    Function ko intentionally rakha gaya hai taake baqi app structure same rahe.
     """
     try:
-        greeting_text = "Kababjees mein khush amdeed. Aap kya order karna chahenge?"
-        generate_voice_eleven_url(greeting_text, filename="greeting.mp3")
-        print("✅ Greeting audio pre-generated successfully.")
+        print("✅ Twilio Polly direct voice mode enabled. ElevenLabs greeting generation skipped.")
     except Exception as e:
-        print(f"Greeting pre-generate error: {e}")
+        print(f"Startup voice mode error: {e}")
 
 
 # ==============================================================
@@ -629,7 +633,7 @@ def get_db_response(user_text, call_sid="voice_call"):
 async def voice_callback(request: Request):
     """
     Twilio incoming call yahan aata hai.
-    ✅ Pre-generated greeting play hoti hai — no delay.
+    ✅ Twilio Polly Neural voice direct speak karti hai — ElevenLabs delay nahi.
     ✅ Call session frontend orders_db mein create hota hai.
     Twilio Webhook: https://vocaldesk-backend.onrender.com/voice
     """
@@ -656,11 +660,13 @@ async def voice_callback(request: Request):
             "delivery_address": ""
         })
 
-    # ✅ Pre-generated greeting use karo — instant play, no delay
-    greeting_url = f"{BASE_URL}/static/greeting.mp3"
-
+    # ✅ Twilio Polly direct greeting — ElevenLabs audio generation/play removed for fast response
     response = VoiceResponse()
-    response.play(greeting_url)
+    response.say(
+        "Kababjees mein khush amdeed. Aap kya order karna chahenge?",
+        voice=TWILIO_TTS_VOICE,
+        language=TWILIO_TTS_LANGUAGE
+    )
 
     gather = Gather(
         input='speech',
@@ -679,9 +685,9 @@ async def voice_callback(request: Request):
 @app.post("/handle-call")
 async def handle_call(request: Request, SpeechResult: str = Form(None)):
     """
-    Customer ki speech → Groq AI jawab → ElevenLabs se play → dobara suno.
+    Customer ki speech → Groq AI jawab → Twilio Polly direct speak → dobara suno.
     ✅ Greeting repeat nahi hogi.
-    ✅ Background noise khatam — turbo model use.
+    ✅ ElevenLabs audio generation delay remove.
     ✅ Har turn frontend orders_db mein update hota hai.
     """
     global orders_db
@@ -693,11 +699,11 @@ async def handle_call(request: Request, SpeechResult: str = Form(None)):
 
     if not SpeechResult or SpeechResult.strip() == "":
         sorry_text = "Maaf kijiyega, dobara farmaiye?"
-        audio_url = generate_voice_eleven_url(sorry_text, filename="sorry.mp3")
-        if audio_url:
-            response.play(audio_url)
-        else:
-            response.say(sorry_text, voice='Polly.Aditi', language='hi-IN')
+        response.say(
+            sorry_text,
+            voice=TWILIO_TTS_VOICE,
+            language=TWILIO_TTS_LANGUAGE
+        )
         gather = Gather(
             input='speech',
             action=f'/handle-call?call_sid={call_sid}',
@@ -716,12 +722,12 @@ async def handle_call(request: Request, SpeechResult: str = Form(None)):
     ai_reply = get_db_response(SpeechResult, call_sid=call_sid)
     print(f"AI jawab (call): {ai_reply}")
 
-    # ElevenLabs se natural awaaz — turbo model, clear voice
-    audio_url = generate_voice_eleven_url(ai_reply, filename="reply.mp3")
-    if audio_url:
-        response.play(audio_url)
-    else:
-        response.say(ai_reply, voice='Polly.Aditi', language='hi-IN')
+    # Twilio Polly direct awaaz — ElevenLabs audio generation/play removed for faster live call response
+    response.say(
+        ai_reply,
+        voice=TWILIO_TTS_VOICE,
+        language=TWILIO_TTS_LANGUAGE
+    )
 
     # Conversation loop — dobara suno
     gather = Gather(
@@ -736,11 +742,11 @@ async def handle_call(request: Request, SpeechResult: str = Form(None)):
 
     # Goodbye agar customer kuch na bole
     goodbye_text = "Shukria Kababjees choose karne ke liye! Khuda Hafiz."
-    goodbye_url = generate_voice_eleven_url(goodbye_text, filename="goodbye.mp3")
-    if goodbye_url:
-        response.play(goodbye_url)
-    else:
-        response.say(goodbye_text, voice='Polly.Aditi', language='hi-IN')
+    response.say(
+        goodbye_text,
+        voice=TWILIO_TTS_VOICE,
+        language=TWILIO_TTS_LANGUAGE
+    )
 
     return Response(content=str(response), media_type="application/xml")
 
