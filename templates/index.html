@@ -714,8 +714,7 @@ const BASE_API_URL = "https://vocaldesk-backend.onrender.com";
 
 async function fetchLiveOrdersFromServer() {
     try {
-        const response = await fetch(`${BASE_API_URL}/orders`, { credentials: "include" });
-        if (response.status === 401) { window.location.href = "/login"; return; }
+        const response = await fetch(`${BASE_API_URL}/orders`);
         if (!response.ok) return;
         const data = await response.json();
         activeServerOrders = data;
@@ -969,8 +968,7 @@ function displayActiveTranscript(phone, element) {
 
 async function fetchVoiceAnalyticsPipeline() {
     try {
-        const response = await fetch(`${BASE_API_URL}/api/analytics/calls`, { credentials: "include" });
-        if (response.status === 401) { window.location.href = "/login"; return; }
+        const response = await fetch(`${BASE_API_URL}/api/analytics/calls`);
         if(response.ok) {
             const voiceStats = await response.json();
             if(voiceStats.total_calls !== undefined) {

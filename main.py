@@ -1,7 +1,4 @@
 import os
-import time
-import hmac
-import hashlib
 import models
 from database import engine, get_db
 from sqlalchemy.orm import Session
@@ -11,7 +8,7 @@ from fastapi import FastAPI, Request, Form, Response
 from dotenv import load_dotenv
 from groq import Groq
 from twilio.twiml.voice_response import VoiceResponse, Gather
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -37,71 +34,6 @@ client_eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 
 BASE_URL = os.getenv("BASE_URL", "https://vocaldesk-backend.onrender.com")
-# ==============================================================
-# ADMIN LOGIN SETTINGS
-# ==============================================================
-
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
-ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "change-this-vocaldesk-secret-key")
-ADMIN_COOKIE_NAME = "vocaldesk_admin_session"
-ADMIN_SESSION_SECONDS = int(os.getenv("ADMIN_SESSION_SECONDS", "86400"))
-ADMIN_COOKIE_SECURE = os.getenv("ADMIN_COOKIE_SECURE", "true").lower() == "true"
-
-
-def load_template(file_name: str) -> str:
-    """templates folder se HTML file read karta hai."""
-    file_path = os.path.join("templates", file_name)
-    if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
-    return f"{file_name} was not found inside templates folder."
-
-
-def create_admin_token(username: str) -> str:
-    """Simple signed cookie token — extra dependency/JWT ki zaroorat nahi."""
-    expires_at = int(time.time()) + ADMIN_SESSION_SECONDS
-    payload = f"{username}:{expires_at}"
-    signature = hmac.new(
-        ADMIN_SECRET_KEY.encode("utf-8"),
-        payload.encode("utf-8"),
-        hashlib.sha256
-    ).hexdigest()
-    return f"{payload}:{signature}"
-
-
-def verify_admin_token(request: Request) -> bool:
-    """Admin cookie verify karta hai."""
-    token = request.cookies.get(ADMIN_COOKIE_NAME)
-    if not token:
-        return False
-
-    try:
-        username, expires_at, signature = token.split(":", 2)
-        payload = f"{username}:{expires_at}"
-
-        expected_signature = hmac.new(
-            ADMIN_SECRET_KEY.encode("utf-8"),
-            payload.encode("utf-8"),
-            hashlib.sha256
-        ).hexdigest()
-
-        if not hmac.compare_digest(signature, expected_signature):
-            return False
-
-        if int(expires_at) < int(time.time()):
-            return False
-
-        return hmac.compare_digest(username, ADMIN_USERNAME)
-    except Exception:
-        return False
-
-
-def unauthorized_json():
-    return JSONResponse(
-        status_code=401,
-        content={"success": False, "message": "Unauthorized. Please login first."}
-    )
 
 
 # Twilio direct TTS settings — faster than ElevenLabs audio generation for live calls
@@ -135,93 +67,12 @@ async def pre_generate_greeting():
 # ==============================================================
 
 @app.get("/", response_class=HTMLResponse)
-async def root_page(request: Request):
-    """
-    Public URL open ho to pehle admin login page show hoga.
-    Agar admin already login hai to dashboard par redirect hoga.
-    """
-    if verify_admin_token(request):
-        return RedirectResponse(url="/dashboard", status_code=303)
-    return HTMLResponse(load_template("login.html"))
-
-
-@app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
-    """Admin login page."""
-    if verify_admin_token(request):
-        return RedirectResponse(url="/dashboard", status_code=303)
-    return HTMLResponse(load_template("login.html"))
-
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_page(request: Request):
-    """Protected dashboard page."""
-    if not verify_admin_token(request):
-        return RedirectResponse(url="/login", status_code=303)
-    return HTMLResponse(load_template("index.html"))
-
-
-@app.post("/admin/login")
-async def admin_login(request: Request):
-    """
-    Admin login API.
-    Frontend JSON bhej sakta hai:
-    { "username": "...", "password": "...", "remember": true }
-    """
-    try:
-        content_type = request.headers.get("content-type", "")
-
-        if "application/json" in content_type:
-            body = await request.json()
-            username = str(body.get("username", "")).strip()
-            password = str(body.get("password", "")).strip()
-            remember = bool(body.get("remember", True))
-        else:
-            form = await request.form()
-            username = str(form.get("username", "")).strip()
-            password = str(form.get("password", "")).strip()
-            remember = str(form.get("remember", "true")).lower() in ["true", "on", "1", "yes"]
-
-        username_ok = hmac.compare_digest(username, ADMIN_USERNAME)
-        password_ok = hmac.compare_digest(password, ADMIN_PASSWORD)
-
-        if not username_ok or not password_ok:
-            return JSONResponse(
-                status_code=401,
-                content={"success": False, "message": "Invalid username or password."}
-            )
-
-        token = create_admin_token(username)
-        response = JSONResponse(
-            content={"success": True, "message": "Login successful.", "redirect": "/dashboard"}
-        )
-
-        max_age = ADMIN_SESSION_SECONDS if remember else None
-        response.set_cookie(
-            key=ADMIN_COOKIE_NAME,
-            value=token,
-            max_age=max_age,
-            httponly=True,
-            secure=ADMIN_COOKIE_SECURE,
-            samesite="lax",
-            path="/"
-        )
-        return response
-
-    except Exception as e:
-        print(f"Admin login error: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "message": "Login failed due to server error."}
-        )
-
-
-@app.post("/admin/logout")
-async def admin_logout():
-    """Admin logout API."""
-    response = JSONResponse(content={"success": True, "redirect": "/login"})
-    response.delete_cookie(ADMIN_COOKIE_NAME, path="/")
-    return response
+async def read_frontend():
+    file_path = os.path.join("templates", "index.html")
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    return "VocalDesk Backend is Live! index.html was not found inside 'templates/' folder."
 
 
 # ==============================================================
@@ -240,19 +91,14 @@ orders_db = []
 
 
 @app.get("/orders")
-async def get_all_orders(request: Request):
-    """Yeh endpoint protected dashboard ko live data supply karega"""
-    if not verify_admin_token(request):
-        return unauthorized_json()
+async def get_all_orders():
+    """Yeh endpoint frontend ko live data supply karega"""
     return orders_db
 
 
 @app.get("/api/analytics/calls")
-async def get_call_analytics(request: Request):
-    """Protected frontend analytics ke liye voice call summary."""
-    if not verify_admin_token(request):
-        return unauthorized_json()
-
+async def get_call_analytics():
+    """Frontend analytics ke liye voice call summary."""
     voice_calls = [o for o in orders_db if o.get("channel") == "Voice Call"]
 
     def safe_amount(value):
