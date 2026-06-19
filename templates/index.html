@@ -629,7 +629,7 @@
           <div class="stat-card"><div class="stat-stripe" style="background:#1D9E75"></div><div class="stat-label"><i class="ti ti-phone-call"></i>Live now</div><div class="stat-value">3</div><div class="stat-footer"><span class="chip chip-green">Active</span></div></div>
           <div class="stat-card"><div class="stat-stripe" style="background:#534AB7"></div><div class="stat-label"><i class="ti ti-clock"></i>Avg duration</div><div class="stat-value">3<span>m</span></div><div class="stat-footer"><span class="chip chip-purple">Today</span></div></div>
           <div class="stat-card"><div class="stat-stripe" style="background:#1D9E75"></div><div class="stat-label"><i class="ti ti-check"></i>Completed</div><div class="stat-value" id="calls-completed-val">15</div><div class="stat-footer"><span class="chip chip-green">78% success</span></div></div>
-          <div class="stat-card"><div class="stat-stripe" style="background:#E24B4A"></div><div class="stat-label"><i class="ti ti-phone-off"></i>Dropped (fixed)</div><div class="stat-value">3</div><div class="stat-footer"><span class="chip chip-red">Bug resolved</span></div></div>
+          <div class="stat-card"><div class="stat-stripe" style="background:#E24B4A"></div><div class="stat-label"><i class="ti ti-phone-off"></i>Failed / No Answer</div><div class="stat-value" id="calls-failed-val">3</div><div class="stat-footer"><span class="chip chip-red">Tracked</span></div></div>
         </div>
         <div class="grid-2">
           <div class="card">
@@ -714,7 +714,8 @@ const BASE_API_URL = "https://vocaldesk-backend.onrender.com";
 
 async function fetchLiveOrdersFromServer() {
     try {
-        const response = await fetch(`${BASE_API_URL}/orders`);
+        const response = await fetch(`${BASE_API_URL}/orders`, { credentials: "include" });
+        if (response.status === 401) { window.location.href = "/login"; return; }
         if (!response.ok) return;
         const data = await response.json();
         activeServerOrders = data;
@@ -855,6 +856,16 @@ function hotReloadChartsPipeline(wpCount, voiceCount, currentRevenue, hoursData,
     }
 }
 
+
+function getStatusChipClass(status) {
+    const s = (status || '').toLowerCase();
+    if (s === 'confirmed') return 'chip-green';
+    if (s === 'completed') return 'chip-blue';
+    if (s === 'busy' || s === 'in progress' || s === 'initiated' || s === 'ringing') return 'chip-amber';
+    if (s === 'failed' || s === 'no answer' || s === 'no-answer' || s === 'cancelled' || s === 'canceled' || s === 'dropped') return 'chip-red';
+    return 'chip-amber';
+}
+
 function renderOrdersTable(data) {
     const tbody = document.getElementById('orderTableBody');
     if (!tbody) return;
@@ -872,7 +883,7 @@ function renderOrdersTable(data) {
             <td style="padding:10px 0;color:#1a1825;font-weight:500">${order.customer_phone}</td>
             <td style="padding:10px 0;color:#6b6880">${order.items_detected || 'Processing Text Input...'}</td>
             <td style="padding:10px 0;text-align:right;font-weight:600;color:#534AB7">Rs. ${order.bill_amount}</td>
-            <td style="padding:10px 0;text-align:right"><span class="chip ${(order.status || '').toLowerCase() === 'confirmed' ? 'chip-green' : ((order.status || '').toLowerCase() === 'cancelled' ? 'chip-red' : 'chip-amber')}">${order.status || 'In Progress'}</span></td>
+            <td style="padding:10px 0;text-align:right"><span class="chip ${getStatusChipClass(order.status)}">${order.status || 'In Progress'}</span></td>
         </tr>`;
     });
     tbody.innerHTML = rowsHTML;
@@ -958,12 +969,28 @@ function displayActiveTranscript(phone, element) {
 
 async function fetchVoiceAnalyticsPipeline() {
     try {
-        const response = await fetch(`${BASE_API_URL}/api/analytics/calls`);
+        const response = await fetch(`${BASE_API_URL}/api/analytics/calls`, { credentials: "include" });
+        if (response.status === 401) { window.location.href = "/login"; return; }
         if(response.ok) {
             const voiceStats = await response.json();
-            if(voiceStats.total_calls) {
+            if(voiceStats.total_calls !== undefined) {
                 document.getElementById('sv-calls').textContent = voiceStats.total_calls;
-                document.getElementById('calls-completed-val').textContent = voiceStats.total_calls;
+                document.getElementById('calls-live').textContent = voiceStats.total_calls;
+                document.getElementById('calls-completed-val').textContent =
+                    voiceStats.confirmed_calls || voiceStats.completed_calls || voiceStats.total_calls;
+
+                const failedVal = document.getElementById('calls-failed-val');
+                if (failedVal) {
+                    failedVal.textContent =
+                        (voiceStats.failed_calls || 0) +
+                        (voiceStats.no_answer_calls || 0) +
+                        (voiceStats.busy_calls || 0);
+                }
+
+                const twilioStatus = document.getElementById('lbl-twilio-status');
+                if (twilioStatus) {
+                    twilioStatus.textContent = `${voiceStats.active_calls || 0} live now`;
+                }
             }
             if (weekChartInstance && voiceStats.weekly_data) {
                 weekChartInstance.data.datasets[0].data = voiceStats.weekly_data;
@@ -1004,28 +1031,59 @@ function shortOrderText(order) {
 
 function voiceStatusChip(status) {
     const s = (status || 'In Progress').toLowerCase();
-    if (s === 'confirmed') return '<span class="chip chip-green">Converted</span>';
-    if (s === 'cancelled' || s === 'dropped') return '<span class="chip chip-red">Dropped</span>';
+
+    if (s === 'confirmed') return '<span class="chip chip-green">Confirmed</span>';
+    if (s === 'completed') return '<span class="chip chip-blue">Completed</span>';
+    if (s === 'busy') return '<span class="chip chip-amber">Busy</span>';
+    if (s === 'no answer' || s === 'no-answer') return '<span class="chip chip-red">No Answer</span>';
+    if (s === 'failed') return '<span class="chip chip-red">Failed</span>';
+    if (s === 'cancelled' || s === 'canceled' || s === 'dropped') return '<span class="chip chip-red">Cancelled</span>';
+
     return '<span class="chip chip-green">Live</span>';
 }
 
 function voiceIconClass(status) {
     const s = (status || 'In Progress').toLowerCase();
-    if (s === 'confirmed') return 'call-ic-done';
-    if (s === 'cancelled' || s === 'dropped') return 'call-ic-drop';
+
+    if (s === 'confirmed' || s === 'completed') return 'call-ic-done';
+    if (
+        s === 'cancelled' ||
+        s === 'canceled' ||
+        s === 'dropped' ||
+        s === 'failed' ||
+        s === 'no answer' ||
+        s === 'no-answer' ||
+        s === 'busy'
+    ) return 'call-ic-drop';
+
     return 'call-ic-live';
 }
 
 function voiceIcon(status) {
     const s = (status || 'In Progress').toLowerCase();
-    if (s === 'confirmed') return 'ti ti-phone-check';
-    if (s === 'cancelled' || s === 'dropped') return 'ti ti-phone-x';
+
+    if (s === 'confirmed' || s === 'completed') return 'ti ti-phone-check';
+    if (s === 'busy') return 'ti ti-phone-pause';
+    if (
+        s === 'cancelled' ||
+        s === 'canceled' ||
+        s === 'dropped' ||
+        s === 'failed' ||
+        s === 'no answer' ||
+        s === 'no-answer'
+    ) return 'ti ti-phone-x';
+
     return 'ti ti-phone';
 }
 
 function renderVoiceRow(order, mode='live') {
     const amount = parseInt(order.bill_amount) || 0;
     const status = order.status || 'In Progress';
+    const callStatus = order.call_status || status;
+    const duration = order.call_duration && order.call_duration !== "0"
+        ? `${order.call_duration}s`
+        : (mode === 'recent' ? 'ended' : 'now');
+
     const detail = mode === 'recent'
         ? (amount > 0 ? `Rs.${amount} order` : shortOrderText(order))
         : shortOrderText(order);
@@ -1036,7 +1094,7 @@ function renderVoiceRow(order, mode='live') {
           <div class="call-ic ${voiceIconClass(status)}"><i class="${voiceIcon(status)}"></i></div>
           <div>
             <div class="call-num">${escapeHTML(order.customer_phone || order.call_sid || 'Voice Caller')}</div>
-            <div class="call-dur">${mode === 'recent' ? 'Live record' : 'Now'} — ${escapeHTML(detail)}</div>
+            <div class="call-dur">${escapeHTML(duration)} · ${escapeHTML(callStatus)} — ${escapeHTML(detail)}</div>
           </div>
         </div>
         ${voiceStatusChip(status)}
@@ -1049,8 +1107,15 @@ function updateLiveAndRecentCallCards(data) {
     if (!liveCard || !recentCard) return;
 
     const voiceOrders = data.filter(isVoiceOrder);
-    const liveVoice = voiceOrders.filter(order => (order.status || '').toLowerCase() === 'in progress').slice(-5).reverse();
-    const recentVoice = voiceOrders.filter(order => (order.status || '').toLowerCase() !== 'in progress').slice(-6).reverse();
+    const liveVoice = voiceOrders.filter(order => {
+        const s = (order.status || '').toLowerCase();
+        return s === 'in progress' || s === 'initiated' || s === 'ringing';
+    }).slice(-5).reverse();
+
+    const recentVoice = voiceOrders.filter(order => {
+        const s = (order.status || '').toLowerCase();
+        return s !== 'in progress' && s !== 'initiated' && s !== 'ringing';
+    }).slice(-6).reverse();
 
     const demoLiveRows = `
       <div class="call-row"><div class="call-l"><div class="call-ic call-ic-live"><i class="ti ti-phone"></i></div><div><div class="call-num">+92 300 123 4567</div><div class="call-dur">02:14 — Ordering fried chicken</div></div></div><span class="chip chip-green">Live</span></div>
@@ -1124,12 +1189,29 @@ function updateLiveDashboardSections(data) {
     updateLivePerformanceSummary(data);
 
     const voiceOrders = data.filter(isVoiceOrder);
-    const liveVoice = voiceOrders.filter(order => (order.status || '').toLowerCase() === 'in progress');
+    const liveVoice = voiceOrders.filter(order => {
+        const s = (order.status || '').toLowerCase();
+        return s === 'in progress' || s === 'initiated' || s === 'ringing';
+    });
+
+    const confirmedOrCompleted = voiceOrders.filter(order => {
+        const s = (order.status || '').toLowerCase();
+        return s === 'confirmed' || s === 'completed';
+    });
+
+    const failedOrNoAnswer = voiceOrders.filter(order => {
+        const s = (order.status || '').toLowerCase();
+        return s === 'failed' || s === 'no answer' || s === 'no-answer' || s === 'busy' || s === 'cancelled' || s === 'canceled';
+    });
 
     if (voiceOrders.length > 0) {
         document.getElementById('sv-calls').textContent = voiceOrders.length;
         document.getElementById('calls-live').textContent = voiceOrders.length;
-        document.getElementById('calls-completed-val').textContent = voiceOrders.filter(order => (order.status || '').toLowerCase() === 'confirmed').length || voiceOrders.length;
+        document.getElementById('calls-completed-val').textContent = confirmedOrCompleted.length || voiceOrders.length;
+
+        const failedVal = document.getElementById('calls-failed-val');
+        if (failedVal) failedVal.textContent = failedOrNoAnswer.length || 0;
+
         const twilioStatus = document.getElementById('lbl-twilio-status');
         if (twilioStatus) twilioStatus.textContent = `${liveVoice.length || 0} live now`;
     }
