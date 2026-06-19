@@ -1,4 +1,7 @@
 import os
+import time
+import hmac
+import hashlib
 import models
 from database import engine, get_db
 from sqlalchemy.orm import Session
@@ -8,7 +11,7 @@ from fastapi import FastAPI, Request, Form, Response
 from dotenv import load_dotenv
 from groq import Groq
 from twilio.twiml.voice_response import VoiceResponse, Gather
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -34,6 +37,72 @@ client_eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 
 BASE_URL = os.getenv("BASE_URL", "https://vocaldesk-backend.onrender.com")
+# ==============================================================
+# ADMIN LOGIN SETTINGS
+# ==============================================================
+
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "change-this-vocaldesk-secret-key")
+ADMIN_COOKIE_NAME = "vocaldesk_admin_session"
+ADMIN_SESSION_SECONDS = int(os.getenv("ADMIN_SESSION_SECONDS", "86400"))
+ADMIN_COOKIE_SECURE = os.getenv("ADMIN_COOKIE_SECURE", "true").lower() == "true"
+
+
+def load_template(file_name: str) -> str:
+    """templates folder se HTML file read karta hai."""
+    file_path = os.path.join("templates", file_name)
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    return f"{file_name} was not found inside templates folder."
+
+
+def create_admin_token(username: str) -> str:
+    """Simple signed cookie token — extra dependency/JWT ki zaroorat nahi."""
+    expires_at = int(time.time()) + ADMIN_SESSION_SECONDS
+    payload = f"{username}:{expires_at}"
+    signature = hmac.new(
+        ADMIN_SECRET_KEY.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256
+    ).hexdigest()
+    return f"{payload}:{signature}"
+
+
+def verify_admin_token(request: Request) -> bool:
+    """Admin cookie verify karta hai."""
+    token = request.cookies.get(ADMIN_COOKIE_NAME)
+    if not token:
+        return False
+
+    try:
+        username, expires_at, signature = token.split(":", 2)
+        payload = f"{username}:{expires_at}"
+
+        expected_signature = hmac.new(
+            ADMIN_SECRET_KEY.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
+
+        if not hmac.compare_digest(signature, expected_signature):
+            return False
+
+        if int(expires_at) < int(time.time()):
+            return False
+
+        return hmac.compare_digest(username, ADMIN_USERNAME)
+    except Exception:
+        return False
+
+
+def unauthorized_json():
+    return JSONResponse(
+        status_code=401,
+        content={"success": False, "message": "Unauthorized. Please login first."}
+    )
+
 
 # Twilio direct TTS settings — faster than ElevenLabs audio generation for live calls
 TWILIO_TTS_VOICE = "Polly.Kajal-Neural"
@@ -66,12 +135,93 @@ async def pre_generate_greeting():
 # ==============================================================
 
 @app.get("/", response_class=HTMLResponse)
-async def read_frontend():
-    file_path = os.path.join("templates", "index.html")
-    if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
-    return "VocalDesk Backend is Live! index.html was not found inside 'templates/' folder."
+async def root_page(request: Request):
+    """
+    Public URL open ho to pehle admin login page show hoga.
+    Agar admin already login hai to dashboard par redirect hoga.
+    """
+    if verify_admin_token(request):
+        return RedirectResponse(url="/dashboard", status_code=303)
+    return HTMLResponse(load_template("login.html"))
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """Admin login page."""
+    if verify_admin_token(request):
+        return RedirectResponse(url="/dashboard", status_code=303)
+    return HTMLResponse(load_template("login.html"))
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page(request: Request):
+    """Protected dashboard page."""
+    if not verify_admin_token(request):
+        return RedirectResponse(url="/login", status_code=303)
+    return HTMLResponse(load_template("index.html"))
+
+
+@app.post("/admin/login")
+async def admin_login(request: Request):
+    """
+    Admin login API.
+    Frontend JSON bhej sakta hai:
+    { "username": "...", "password": "...", "remember": true }
+    """
+    try:
+        content_type = request.headers.get("content-type", "")
+
+        if "application/json" in content_type:
+            body = await request.json()
+            username = str(body.get("username", "")).strip()
+            password = str(body.get("password", "")).strip()
+            remember = bool(body.get("remember", True))
+        else:
+            form = await request.form()
+            username = str(form.get("username", "")).strip()
+            password = str(form.get("password", "")).strip()
+            remember = str(form.get("remember", "true")).lower() in ["true", "on", "1", "yes"]
+
+        username_ok = hmac.compare_digest(username, ADMIN_USERNAME)
+        password_ok = hmac.compare_digest(password, ADMIN_PASSWORD)
+
+        if not username_ok or not password_ok:
+            return JSONResponse(
+                status_code=401,
+                content={"success": False, "message": "Invalid username or password."}
+            )
+
+        token = create_admin_token(username)
+        response = JSONResponse(
+            content={"success": True, "message": "Login successful.", "redirect": "/dashboard"}
+        )
+
+        max_age = ADMIN_SESSION_SECONDS if remember else None
+        response.set_cookie(
+            key=ADMIN_COOKIE_NAME,
+            value=token,
+            max_age=max_age,
+            httponly=True,
+            secure=ADMIN_COOKIE_SECURE,
+            samesite="lax",
+            path="/"
+        )
+        return response
+
+    except Exception as e:
+        print(f"Admin login error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": "Login failed due to server error."}
+        )
+
+
+@app.post("/admin/logout")
+async def admin_logout():
+    """Admin logout API."""
+    response = JSONResponse(content={"success": True, "redirect": "/login"})
+    response.delete_cookie(ADMIN_COOKIE_NAME, path="/")
+    return response
 
 
 # ==============================================================
@@ -90,16 +240,19 @@ orders_db = []
 
 
 @app.get("/orders")
-async def get_all_orders():
-    """Yeh endpoint frontend ko live data supply karega"""
+async def get_all_orders(request: Request):
+    """Yeh endpoint protected dashboard ko live data supply karega"""
+    if not verify_admin_token(request):
+        return unauthorized_json()
     return orders_db
 
 
 @app.get("/api/analytics/calls")
-async def get_call_analytics():
-    """Frontend analytics ke liye voice call summary.
-    Is route ke bina dashboard /api/analytics/calls par 404 show kar raha tha.
-    """
+async def get_call_analytics(request: Request):
+    """Protected frontend analytics ke liye voice call summary."""
+    if not verify_admin_token(request):
+        return unauthorized_json()
+
     voice_calls = [o for o in orders_db if o.get("channel") == "Voice Call"]
 
     def safe_amount(value):
@@ -112,8 +265,21 @@ async def get_call_analytics():
         "total_calls": len(voice_calls),
         "active_calls": len([o for o in voice_calls if o.get("status") == "In Progress"]),
         "confirmed_calls": len([o for o in voice_calls if o.get("status") == "Confirmed"]),
-        "cancelled_calls": len([o for o in voice_calls if o.get("status") == "Cancelled"]),
+        "completed_calls": len([o for o in voice_calls if o.get("status") == "Completed"]),
+        "busy_calls": len([o for o in voice_calls if o.get("status") == "Busy"]),
+        "no_answer_calls": len([o for o in voice_calls if o.get("status") == "No Answer"]),
+        "failed_calls": len([o for o in voice_calls if o.get("status") == "Failed"]),
+        "cancelled_calls": len([o for o in voice_calls if o.get("status") in ["Cancelled", "Canceled"]]),
         "voice_revenue": sum(safe_amount(o.get("bill_amount", 0)) for o in voice_calls if o.get("status") == "Confirmed"),
+        "weekly_data": [
+            max(1, len(voice_calls) - 6),
+            max(2, len(voice_calls) - 4),
+            max(3, len(voice_calls) - 3),
+            max(4, len(voice_calls) - 2),
+            max(5, len(voice_calls) - 1),
+            max(6, len(voice_calls)),
+            max(3, len(voice_calls) // 2)
+        ],
         "calls": voice_calls[-20:]
     }
 
@@ -563,6 +729,115 @@ def generate_voice_eleven(text):
         return None
 
 
+
+# ==============================================================
+# VOICE CALL STATUS TRACKING
+# ==============================================================
+
+def normalize_twilio_call_status(raw_status: str) -> str:
+    """Twilio raw status ko dashboard friendly status mein convert karta hai."""
+    status = (raw_status or "").strip().lower()
+    mapping = {
+        "queued": "Queued",
+        "initiated": "Initiated",
+        "ringing": "Ringing",
+        "in-progress": "In Progress",
+        "answered": "In Progress",
+        "completed": "Completed",
+        "busy": "Busy",
+        "no-answer": "No Answer",
+        "failed": "Failed",
+        "canceled": "Cancelled",
+        "cancelled": "Cancelled"
+    }
+    return mapping.get(status, raw_status or "Unknown")
+
+
+def update_voice_call_status(call_sid: str, twilio_status: str, caller_number: str = "Unknown", duration: str = "0"):
+    """
+    Twilio CallSid ke base par call session update karta hai.
+    Confirmed order ko Completed se overwrite nahi karta.
+    """
+    global orders_db
+    friendly_status = normalize_twilio_call_status(twilio_status)
+    call_sid = call_sid or "voice_call"
+
+    call_session = next((o for o in orders_db if o.get("call_sid") == call_sid), None)
+
+    if not call_session:
+        call_session = {
+            "id": len(orders_db) + 1,
+            "customer_phone": caller_number or "Unknown",
+            "call_sid": call_sid,
+            "items_detected": "Voice call tracked",
+            "bill_amount": "0",
+            "user_text": "",
+            "ai_text": "",
+            "status": "In Progress",
+            "call_status": friendly_status,
+            "call_duration": duration or "0",
+            "channel": "Voice Call",
+            "payment_method": "Cash On Delivery",
+            "delivery_address": ""
+        }
+        orders_db.append(call_session)
+
+    call_session["call_status"] = friendly_status
+    call_session["call_duration"] = duration or call_session.get("call_duration", "0")
+
+    if caller_number and caller_number != "Unknown":
+        call_session["customer_phone"] = caller_number
+
+    current_status = call_session.get("status", "In Progress")
+
+    # Confirmed order ko call completed status se overwrite nahi karna
+    if current_status == "Confirmed":
+        return call_session
+
+    if friendly_status in ["Queued", "Initiated", "Ringing", "In Progress"]:
+        call_session["status"] = "In Progress"
+    elif friendly_status in ["Completed", "Busy", "No Answer", "Failed", "Cancelled"]:
+        call_session["status"] = friendly_status
+
+    return call_session
+
+
+@app.post("/voice-status")
+async def voice_status_callback(request: Request):
+    """
+    Twilio status callback endpoint.
+    Twilio yahan call lifecycle bhej sakta hai:
+    initiated, ringing, in-progress, completed, busy, no-answer, failed.
+    """
+    form_data = await request.form()
+
+    call_sid = form_data.get("CallSid", "voice_call")
+    call_status = form_data.get("CallStatus", "Unknown")
+    caller_number = form_data.get("From", "Unknown")
+    duration = form_data.get("CallDuration", "0")
+
+    updated = update_voice_call_status(
+        call_sid=call_sid,
+        twilio_status=call_status,
+        caller_number=caller_number,
+        duration=duration
+    )
+
+    print("📞 TWILIO CALL STATUS UPDATED:", {
+        "call_sid": call_sid,
+        "call_status": call_status,
+        "dashboard_status": updated.get("status"),
+        "duration": duration
+    })
+
+    return {
+        "success": True,
+        "call_sid": call_sid,
+        "status": updated.get("status"),
+        "call_status": updated.get("call_status")
+    }
+
+
 # ==============================================================
 # TWILIO VOICE CALL ENDPOINTS
 # ==============================================================
@@ -725,6 +1000,8 @@ def finalize_voice_order_if_done(call_sid, ai_reply, user_text=""):
             "user_text": user_text,
             "ai_text": clean_reply,
             "status": "In Progress",
+            "call_status": "In Progress",
+            "call_duration": "0",
             "channel": "Voice Call",
             "payment_method": "Cash On Delivery",
             "delivery_address": ""
@@ -744,6 +1021,7 @@ def finalize_voice_order_if_done(call_sid, ai_reply, user_text=""):
         order["delivery_address"] = parsed_address
 
     order["status"] = "Confirmed"
+    order["call_status"] = order.get("call_status", "In Progress")
     order["ai_text"] = order.get("ai_text", "") + f"\n\nAI: {clean_reply}"
 
     print("VOICE ORDER CONFIRMED:", order)
@@ -756,7 +1034,8 @@ async def voice_callback(request: Request):
     Twilio incoming call yahan aata hai.
     ✅ Twilio Polly Neural voice direct speak karti hai — ElevenLabs delay nahi.
     ✅ Call session frontend orders_db mein create hota hai.
-    Twilio Webhook: https://vocaldesk-backend.onrender.com/voice
+    Twilio Voice Webhook: https://vocaldesk-backend.onrender.com/voice
+    Twilio Status Callback: https://vocaldesk-backend.onrender.com/voice-status
     """
     global orders_db
 
@@ -776,6 +1055,8 @@ async def voice_callback(request: Request):
             "user_text": "",
             "ai_text": "",
             "status": "In Progress",
+            "call_status": "In Progress",
+            "call_duration": "0",
             "channel": "Voice Call",
             "payment_method": "Cash On Delivery",
             "delivery_address": ""
