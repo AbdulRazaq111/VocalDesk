@@ -729,17 +729,23 @@ def get_db_response(user_text, call_sid="voice_call"):
             f"\n2. PRICE LOCK: Sirf database se exact price batao. Koi estimated ya rounded price mat do."
             f"\n3. ITEM NAME LOCK: Customer ne jo exact item bola wahi repeat karo. Apni taraf se item name change ya rename mat karo."
             f"\n4. MATH LOCK: Total = quantity x unit price. Calculate karo aur confirm karo."
-            f"\n5. UPSELL: 'Sir, iske sath kuch aur add karni hai?'"
-            f"\n6. Jab tak items, total bill, delivery address aur payment method complete na hon, order confirm mat bolo."
-            f"\n7. Jab customer final yes/confirm kare aur items + bill + address + payment complete hon, final summary exactly is format mein do:"
+            f"\n5. IMPORTANT CALL FLOW: Customer item bataye to call end mat karo. Pehle quantity confirm karo, phir delivery address mango, phir payment method mango."
+            f"\n6. Payment method sirf Cash On Delivery ya Online Payment ho sakta hai. Agar customer na bataye to poochho: 'Payment cash hogi ya online?'"
+            f"\n7. Jab tak items, quantity, total bill, delivery address aur payment method complete na hon, goodbye/khuda hafiz/order confirm mat bolo."
+            f"\n8. Agar customer sirf item bole, next reply ka format ho: 'Chicken Burger note kar liya. Quantity kitni chahiye?'"
+            f"\n9. Agar quantity complete ho lekin address missing ho, poochho: 'Delivery address bata dein?'"
+            f"\n10. Agar address complete ho lekin payment missing ho, poochho: 'Payment cash hogi ya online?'"
+            f"\n11. Jab items + bill + address + payment complete ho jayein, customer ko summary suna kar poochho: 'Kya main order confirm kar doon?'"
+            f"\n12. Sirf customer final yes/confirm kare tab final summary exactly is format mein do:"
             f"\nORDER SUMMARY:"
             f"\n2x Chicken Burger - Rs. 400"
             f"\nSubtotal: Rs. 400"
             f"\nAddress: customer address"
             f"\nPayment: Cash On Delivery"
             f"\n[ORDER_DONE]"
-            f"\n8. [ORDER_DONE] sirf final confirmation ke time lagana. Is tag ke baghair backend order confirmed nahi karega."
-            f"\n9. Normal jawab hamesha 1-2 lines mein do. Short aur professional."
+            f"\n13. [ORDER_DONE] sirf final confirmation ke time lagana. Is tag ke baghair backend order confirmed nahi karega."
+            f"\n14. Normal jawab hamesha 1-2 lines mein do. Short aur professional."
+            f"\n15. Never say goodbye unless order is confirmed or customer clearly says bye/cancel."
         )
 
         messages = [{"role": "system", "content": system_content}]
@@ -908,13 +914,8 @@ async def voice_callback(request: Request):
             "delivery_address": ""
         })
 
-    # ✅ Twilio Polly direct greeting — ElevenLabs audio generation/play removed for fast response
+    # ✅ Greeting Gather ke andar hai taake Twilio prompt ke foran baad customer ka order sune
     response = VoiceResponse()
-    response.say(
-        "Kababjees mein khush amdeed. Aap kya order karna chahenge?",
-        voice=TWILIO_TTS_VOICE,
-        language=TWILIO_TTS_LANGUAGE
-    )
 
     gather = Gather(
         input='speech',
@@ -922,10 +923,17 @@ async def voice_callback(request: Request):
         method='POST',
         language='ur-PK',
         speechTimeout='auto',
-        timeout=5
+        timeout=8
+    )
+    gather.say(
+        "Kababjees mein khush amdeed. Aap kya order karna chahenge?",
+        voice=TWILIO_TTS_VOICE,
+        language=TWILIO_TTS_LANGUAGE
     )
     response.append(gather)
-    response.redirect('/voice')
+
+    # Agar customer first prompt par silent ho to dobara same question poochho
+    response.redirect(f'/handle-call?call_sid={call_sid}', method='POST')
 
     return Response(content=str(response), media_type="application/xml")
 
@@ -934,9 +942,9 @@ async def voice_callback(request: Request):
 async def handle_call(request: Request, SpeechResult: str = Form(None)):
     """
     Customer ki speech → Groq AI jawab → Twilio Polly direct speak → dobara suno.
-    ✅ Greeting repeat nahi hogi.
-    ✅ ElevenLabs audio generation delay remove.
-    ✅ Har turn frontend orders_db mein update hota hai.
+    ✅ Fixed: AI reply Gather ke andar bola jata hai, taake customer immediately next answer de sake.
+    ✅ Fixed: Har turn ke baad direct goodbye nahi bolega.
+    ✅ Call sirf final confirmed order ke baad close hogi.
     """
     global orders_db
 
@@ -946,22 +954,21 @@ async def handle_call(request: Request, SpeechResult: str = Form(None)):
     response = VoiceResponse()
 
     if not SpeechResult or SpeechResult.strip() == "":
-        sorry_text = "Maaf kijiyega, dobara farmaiye?"
-        response.say(
-            sorry_text,
-            voice=TWILIO_TTS_VOICE,
-            language=TWILIO_TTS_LANGUAGE
-        )
         gather = Gather(
             input='speech',
             action=f'/handle-call?call_sid={call_sid}',
             method='POST',
             language='ur-PK',
             speechTimeout='auto',
-            timeout=5
+            timeout=8
+        )
+        gather.say(
+            "Maaf kijiyega, dobara farmaiye. Aap kya order karna chahenge?",
+            voice=TWILIO_TTS_VOICE,
+            language=TWILIO_TTS_LANGUAGE
         )
         response.append(gather)
-        response.redirect('/voice')
+        response.redirect(f'/handle-call?call_sid={call_sid}', method='POST')
         return Response(content=str(response), media_type="application/xml")
 
     print(f"Customer ne kaha (call): {SpeechResult}")
@@ -972,34 +979,37 @@ async def handle_call(request: Request, SpeechResult: str = Form(None)):
     # Agar voice call mein order final ho gaya ho to frontend ke liye status Confirmed karo
     ai_reply, voice_order_confirmed = finalize_voice_order_if_done(call_sid, ai_reply, SpeechResult)
     print(f"AI jawab (call): {ai_reply}")
+
+    # Agar order final confirm ho gaya, summary bol kar call close karo
     if voice_order_confirmed:
-        print("✅ Voice call order frontend par Confirmed show hoga.")
+        response.say(
+            ai_reply + " Shukria Kababjees choose karne ke liye. Khuda Hafiz.",
+            voice=TWILIO_TTS_VOICE,
+            language=TWILIO_TTS_LANGUAGE
+        )
+        response.hangup()
+        return Response(content=str(response), media_type="application/xml")
 
-    # Twilio Polly direct awaaz — ElevenLabs audio generation/play removed for faster live call response
-    response.say(
-        ai_reply,
-        voice=TWILIO_TTS_VOICE,
-        language=TWILIO_TTS_LANGUAGE
-    )
-
-    # Conversation loop — dobara suno
+    # Important fix:
+    # Pehle AI reply ko Gather ke andar bolenge, phir Twilio customer ka next answer sune ga.
+    # Iske baad immediate goodbye nahi hoga.
     gather = Gather(
         input='speech',
         action=f'/handle-call?call_sid={call_sid}',
         method='POST',
         language='ur-PK',
         speechTimeout='auto',
-        timeout=5
+        timeout=8
     )
-    response.append(gather)
-
-    # Goodbye agar customer kuch na bole
-    goodbye_text = "Shukria Kababjees choose karne ke liye! Khuda Hafiz."
-    response.say(
-        goodbye_text,
+    gather.say(
+        ai_reply,
         voice=TWILIO_TTS_VOICE,
         language=TWILIO_TTS_LANGUAGE
     )
+    response.append(gather)
+
+    # Agar customer silent rahe to dobara same handle-call par jao, goodbye nahi bolo
+    response.redirect(f'/handle-call?call_sid={call_sid}', method='POST')
 
     return Response(content=str(response), media_type="application/xml")
 
